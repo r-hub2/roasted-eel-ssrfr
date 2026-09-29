@@ -241,7 +241,9 @@ local_corpus_servers <- function(env = parent.frame()) {
 # to loopback; every later query gets the row's `answers`.
 #
 # Returns the outcome, its verdict class, the hop that decided it, `via`
-# ("first", "fetch" or "from") and the resolver queries after the first hop.
+# ("first", "fetch" or "from") and the resolver queries after the first hop;
+# NULL for a row served over TLS where the fixture CA cannot be trusted
+# (helper-transport.R), which the caller skips once every other row ran.
 decide_row_l2 <- function(row, ports) {
   input <- unescape_field(row$input)
   base <- corpus_base(row$hop)
@@ -252,6 +254,9 @@ decide_row_l2 <- function(row, ports) {
     return(l2_outcome(out, "first", resolver$seen$queries))
   }
   scheme <- sub(":.*$", "", base)
+  if (scheme == "https" && test_ca_ignored()) {
+    return(NULL)
+  }
   port <- ports[[scheme]]
   previous <- sub("^(https?://[^/?#]+)", paste0("\\1:", port), base)
   policy <- corpus_policy(row$policy, allow_ports = port)

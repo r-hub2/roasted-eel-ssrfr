@@ -451,7 +451,7 @@ V0449	scheme	HTTP://93.184.216.34/	-	default	first	admit	-	L0	active	ssrfr-v1.md
 V0450	scheme	https://93.184.216.34/	-	default	first	admit	-	L0	active	ssrfr-v1.md §5.3	https to a public literal
 V0451	scheme	ftp://93.184.216.34/	-	default	first	refuse	scheme	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R	ftp is not an allowed scheme
 V0452	scheme	gopher://93.184.216.34/	-	default	first	refuse	scheme	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R	gopher is not an allowed scheme
-V0453	scheme	file://93.184.216.34/	-	default	first	refuse	parse	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R	rurl layer 2 admits file:, then libcurl refuses a file URL with a remote host, so the step-2 parse refuses first
+V0453	scheme	file://93.184.216.34/	-	default	first	refuse	parse	L0	superseded:its code differs by platform: libcurl on Windows parses file://HOST/ as a UNC path, so there the row refuses at step 3 as scheme, not at step 2 as parse (r-binding.md §2.3); V0538 replaces it	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R	rurl layer 2 admits file:, then libcurl refuses a file URL with a remote host, so the step-2 parse refuses first
 V0454	scheme	//93.184.216.34/	-	default	first	refuse	parse	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R ; ssrfr-v1.md §2.6	scheme-relative first hop has no scheme
 V0455	scheme	93.184.216.34/	-	default	first	refuse	parse	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R ; ssrfr-v1.md §2.6	schemeless first hop
 V0456	scheme	gopher://127.0.0.1:6379/_INFO	-	default	first	refuse	scheme	L0	active	ssrfr-v1.md §11.1 ; ssrfr-v1.md §12	gopher to Redis refuses on scheme before port or address
@@ -536,3 +536,4 @@ V0534	limit	http://public.example/abcdefgh	93.184.216.34	max_url_length=30	first
 V0535	operational	http://nx.example/	empty	default	first	fail	unresolvable	L1	active	ssrfr-v1.md §6.6 ; ssrfr-v1.md INV-11	resolver returns no address
 V0536	operational	http://nx.example/	error	default	first	fail	unresolvable	L1	active	ssrfr-v1.md §6.6 ; ssrfr-v1.md INV-11	resolver raises an error
 V0537	operational	http://nx.example/	unparseable:not-an-address	default	first	fail	unresolvable	L1	active	ssrfr-v1.md §6.6 ; ssrfr-v1.md INV-11	resolver returns a non-address
+V0538	scheme	file://93.184.216.34:21/	-	default	first	refuse	parse	L0	active	libcurl lib/urlapi.c (curl-8_14_1) ; robotstxtr R/ssrf.R ; sitemapr R/ssrf.R	replaces V0453: rurl layer 2 admits file:, then libcurl refuses a file URL whose host carries a port, on Windows too, so the step-2 parse refuses first

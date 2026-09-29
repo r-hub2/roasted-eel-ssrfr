@@ -503,7 +503,11 @@ test_that("proxy variables have no effect", {
   tls <- local_test_server(tls = TRUE)
   port <- web$get_port()
   tport <- tls$get_port()
-  local_trust_test_ca()
+  # The http rows run even where the fixture CA cannot be trusted.
+  secure_too <- !test_ca_ignored()
+  if (secure_too) {
+    local_trust_test_ca()
+  }
   mock_answers("127.0.0.1")
   dead <- free_port()
   policy <- loopback_policy(c(port, tport))
@@ -526,16 +530,19 @@ test_that("proxy variables have no effect", {
       local({
         withr::local_envvar(stats::setNames(value, var))
         plain <- guarded_get(pinned_url(port), policy)
-        secure <- guarded_get(secure_url, policy)
         expect_identical(plain$status, 200L, label = paste(var, value, "http"))
-        expect_identical(
-          secure$status,
-          200L,
-          label = paste(var, value, "https")
-        )
+        if (secure_too) {
+          secure <- guarded_get(secure_url, policy)
+          expect_identical(
+            secure$status,
+            200L,
+            label = paste(var, value, "https")
+          )
+        }
       })
     }
   }
+  skip_if_test_ca_ignored()
 })
 
 # Under a connect_to pin a leaked proxy is sent CONNECT to the pinned
@@ -548,7 +555,10 @@ test_that("nothing reaches a listener standing in for the proxy", {
   tls <- local_test_server(tls = TRUE)
   port <- web$get_port()
   tport <- tls$get_port()
-  local_trust_test_ca()
+  secure_too <- !test_ca_ignored()
+  if (secure_too) {
+    local_trust_test_ca()
+  }
   mock_answers("127.0.0.1")
   proxy <- local_listener()
   value <- paste0("http://127.0.0.1:", proxy$port)
@@ -560,12 +570,15 @@ test_that("nothing reaches a listener standing in for the proxy", {
   ))
   policy <- loopback_policy(c(port, tport), total_timeout = 10)
   expect_identical(guarded_get(pinned_url(port), policy)$status, 200L)
-  secure <- guarded_get(
-    pinned_url(tport, scheme = "https", host = "alpha.example.invalid"),
-    policy
-  )
-  expect_identical(secure$status, 200L)
+  if (secure_too) {
+    secure <- guarded_get(
+      pinned_url(tport, scheme = "https", host = "alpha.example.invalid"),
+      policy
+    )
+    expect_identical(secure$status, 200L)
+  }
   expect_false(connection_arrives(proxy$socket, 1))
+  skip_if_test_ca_ignored()
 })
 
 test_that("Alt-Svc has no effect on a later fetch", {

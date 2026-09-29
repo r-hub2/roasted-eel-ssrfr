@@ -208,8 +208,58 @@ local_test_server <- function(
 # --- TLS ----------------------------------------------------------------------
 # ssrfr never takes a CA bundle from its caller (§14), so a test trusts the
 # fixture CA by adding `cainfo` to the options the builder returns.
+#
+# Where libcurl ignores `cainfo`, the fixture CA cannot be trusted
+# (r-binding.md §7): the Rtools build of libcurl on Windows patches Schannel
+# never to use a CA file. That is found by a fetch, once per run, never
+# assumed from the platform: only a Schannel whose handshake rejects the
+# fixture chain with the file set counts, so any other failure still fails
+# its test. A test that needs the fixture CA skips there; Windows runs the
+# whole suite under CURL_SSL_BACKEND=openssl.
+
+test_ca_probe <- new.env(parent = emptyenv())
+
+test_ca_ignored <- function() {
+  if (is.null(test_ca_probe$ignored)) {
+    test_ca_probe$ignored <- probe_test_ca_ignored()
+  }
+  test_ca_probe$ignored
+}
+
+probe_test_ca_ignored <- function() {
+  # The active backend is the one curl_version() lists outside parentheses.
+  ssl <- curl::curl_version()$ssl_version
+  if (!startsWith(trimws(gsub("\\([^)]*\\)", "", ssl)), "Schannel")) {
+    return(FALSE)
+  }
+  tls <- local_test_server(tls = TRUE)
+  port <- tls$get_port()
+  handle <- curl::new_handle(
+    connect_to = "alpha.example.invalid::127.0.0.1:",
+    cainfo = normalizePath(test_path("certs", "ca.crt"), winslash = "/"),
+    noproxy = "*",
+    timeout = 10L
+  )
+  e <- tryCatch(
+    curl::curl_fetch_memory(
+      paste0("https://alpha.example.invalid:", port, "/"),
+      handle = handle
+    ),
+    error = identity
+  )
+  inherits(e, "curl_error_peer_failed_verification") &&
+    grepl("SEC_E_UNTRUSTED_ROOT", conditionMessage(e), fixed = TRUE)
+}
+
+skip_if_test_ca_ignored <- function() {
+  skip_if(
+    test_ca_ignored(),
+    "Schannel ignores cainfo in this libcurl build (r-binding.md §7)"
+  )
+}
 
 local_trust_test_ca <- function(env = parent.frame()) {
+  skip_if_test_ca_ignored()
   builder <- ssrfr:::transport_options
   ca <- test_path("certs", "ca.crt")
   local_mocked_bindings(

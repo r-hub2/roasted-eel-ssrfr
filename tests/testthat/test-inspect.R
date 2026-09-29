@@ -428,3 +428,15 @@ test_that("L0 makes no network call", {
   )
   expect_identical(outcomes, p$expect)
 })
+
+# The input of verdict vector V0453, superseded because its code differs by
+# platform (r-binding.md §2.3): libcurl on Windows parses file://HOST/ as a
+# UNC path, so there step 2 admits it and step 3 refuses it. Either way it
+# refuses at L0, with no network call.
+test_that("a file URL with a remote host refuses at L0 on every platform", {
+  local_no_network()
+  r <- ssrf_inspect_url("file://93.184.216.34/")
+  windows <- .Platform$OS.type == "windows"
+  expect_identical(r$code, if (windows) "scheme" else "parse")
+  expect_identical(r$step, if (windows) 3L else 2L)
+})
