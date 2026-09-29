@@ -1,0 +1,262 @@
+---
+title: "Introduction to ssrfr"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Introduction to ssrfr}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(ssrfr)
+```
+
+`ssrfr` is under development. It guards one hop at a time:
+`ssrf_prepare_hop()` decides whether a URL may be fetched and `ssrf_fetch()`
+fetches it through a pinned connection; a redirect is followed by preparing
+the next hop from the previous one, or by `ssrf_fetch_chain()`, which runs
+that loop. The contract it implements is
+`design/specs/ssrfr-v1.md` in the source repository.
+
+Every hop is evaluated under a policy. It is validated when it is built, so a
+malformed rule is an error rather than a rule that silently matches nothing:
+
+```{r}
+policy <- ssrf_policy(allow_ranges = "10.0.0.0/8", deny_hosts = ".corp")
+policy
+
+try(ssrf_policy(deny_hosts = "com, ru"))
+```
+
+The reason codes a refusal will carry are a closed, versioned vocabulary:
+
+```{r}
+ssrf_vocabulary("reason_codes")$code
+```
+
+## Inspecting a URL
+
+`ssrf_inspect_url()` reports what a URL is under a policy, with no network
+I/O. It parses the URL as the guarded fetch will, with `rurl` and then with
+libcurl's own parser, and reports the first check that applies: a parse the two
+parsers disagree on, the scheme, embedded credentials, the port, an ambiguous
+numeric host, the hostname rules, and, for a host written as an address, the
+address rules.
+
+```{r}
+ssrf_inspect_url("http://0177.0.0.1/")$code
+ssrf_inspect_url("http://[64:ff9b::a9fe:a9fe]/latest/meta-data/")
+```
+
+It is a pre-filter and a way to lint a configuration, not a defense. It
+resolves no name, so a name it finds nothing wrong with may still point
+anywhere:
+
+```{r}
+ssrf_inspect_url("https://example.com/")$code
+
+policy <- ssrf_policy(allow_ranges = "10.0.0.0/8")
+ssrf_inspect_url("http://10.1.2.3/", policy)$code
+```
+
+The provider endpoints and metadata hostnames it refuses by default are
+vocabularies too, each row citing the vendor documentation that names it:
+
+```{r}
+ssrf_vocabulary("metadata_hostnames")$hostname
+```
+
+## Inspecting what a name resolves to
+
+With `layer = "L1"`, `ssrf_inspect_url()` also asks the system resolver, once,
+for every address of a name the earlier checks passed, and classifies each
+address with the addresses embedded in it. The name is looked up as absolute,
+with a trailing root dot, so `http://intranet/` is never completed with a DNS
+search domain. One refused address refuses the whole set, and each address
+keeps its own facts. Were `dual.example` to resolve to `93.184.216.34` and
+`::1`:
+
+```{r, eval = FALSE}
+res <- ssrf_inspect_url("http://dual.example/", layer = "L1")
+res$code
+#> [1] "loopback"
+vapply(res$addresses, function(a) a$code, "")
+#> [1] NA         "loopback"
+```
+
+A resolver error, an empty answer or an answer that is not an address is the
+operational cause `"unresolvable"`, in `cause` rather than `code`. A URL an
+earlier check refuses is never looked up, so this makes no DNS query:
+
+```{r}
+ssrf_inspect_url("http://files.example:6379/", layer = "L1")$code
+```
+
+L1 is still not a defense: the answer can change the moment it returns. Only
+the guarded fetch, which connects to an address it has just validated, is.
+
+## Fetching through the guard
+
+A guarded hop has two steps. `ssrf_prepare_hop()` parses the URL, checks it,
+resolves a name once and classifies every address, and returns one of three
+values: a refusal (`code`), an operational failure (`cause`), or a binding.
+Only a binding can be fetched. Nothing below makes a network call: these URLs
+are refused, or their host is an address, which needs no resolution.
+
+```{r}
+policy <- ssrf_policy()
+
+refusal <- ssrf_prepare_hop("http://169.254.169.254/latest/", policy,
+                            request = list())
+refusal$code
+ssrf_public_reason(refusal)
+
+binding <- ssrf_prepare_hop(
+  "https://93.184.216.34/data?page=2#top",
+  policy,
+  request = list(headers = c(Authorization = "Bearer not-shown"))
+)
+binding
+```
+
+The request plan is part of the decision, not of the fetch: a list of
+`method`, `headers`, `body` and `carry`, where `list()` is a plain `GET`. A
+header the transport owns, such as `Host`, or a metadata-service marker such
+as `Metadata-Flavor`, is an error before anything is parsed:
+
+```{r}
+try(ssrf_prepare_hop("https://example.com/", policy,
+                     request = list(headers = c(`Metadata-Flavor` = "Google"))))
+```
+
+`ssrf_fetch()` then connects only to an address the binding validated. The
+connection is pinned with libcurl's `connect_to`, so the `Host` header, SNI
+and certificate verification stay bound to the hostname, while the name is
+never resolved again. The binding is single-use and spent on entry; the
+response owns no connection and prints no body:
+
+```{r, eval = FALSE}
+response <- ssrf_fetch(binding)
+response
+#> <ssrfr_response>
+#>   status: 200
+#>   type: text/html
+#>   body: 1256 bytes (read it with $body)
+rawToChar(response$body)
+binding$state$status
+#> [1] 200
+try(ssrf_fetch(binding))
+#> Error : This binding was already fetched; prepare the hop again.
+```
+
+A failure on the wire is a value, not an error: `cause` is one of
+`ssrf_vocabulary("causes")`, and `detail` lists the addresses tried and how
+each attempt ended. Like a refusal, project it with `ssrf_public_reason()`
+before an untrusted party sees it.
+
+## Following redirects
+
+`ssrf_fetch_chain()` follows a whole redirect chain through the guard and
+returns its last outcome: the final response, or the refusal or failure that
+ended the chain.
+
+```{r, eval = FALSE}
+policy <- ssrf_policy(max_redirects = 5)
+result <- ssrf_fetch_chain(
+  "https://example.com/start",
+  policy,
+  request = list(headers = c(Authorization = "Bearer not-shown"))
+)
+```
+
+It is built on the two primitives and adds nothing to them. A redirect is
+returned, not followed, by `ssrf_fetch()`: its status is in the response and
+its `Location` in `binding$state$location`. To follow it, prepare the next
+hop with `from = binding`. The `Location` may be relative; it is resolved
+against the previous hop's URL, and the new URL is checked from the start.
+The request plan is inherited, never restated: a redirect to another origin
+drops the body and every header field the plan did not nominate in `carry`,
+and `Authorization`, `Proxy-Authorization` and `Cookie` never cross. This is
+the loop `ssrf_fetch_chain()` runs. It keeps only the last outcome, so an
+application that must log every hop, as OWASP's "log all accepted and
+blocked network flows" asks, runs the loop itself and logs each hop's
+binding and outcome where the comment marks:
+
+```{r, eval = FALSE}
+policy <- ssrf_policy(max_redirects = 5)
+result <- ssrf_prepare_hop(
+  "https://example.com/start",
+  policy,
+  request = list(headers = c(Authorization = "Bearer not-shown"))
+)
+while (inherits(result, "ssrfr_binding")) {
+  hop <- result
+  result <- ssrf_fetch(hop)
+  # Log this hop here: `hop` is its spent binding, `result` its outcome.
+  followed <- inherits(result, "ssrfr_response") &&
+    result$status %in% c(301, 302, 303, 307, 308) &&
+    identical(hop$state$location_count, 1L)
+  if (!followed) {
+    break
+  }
+  result <- ssrf_prepare_hop(hop$state$location, policy, from = hop)
+}
+outcome <- if (inherits(result, "ssrfr_response")) {
+  result$body # the body's bytes, a raw vector, whatever they hold
+} else if (inherits(result, "ssrfr_refusal")) {
+  result$code
+} else {
+  result$cause
+}
+```
+
+The loop, like `ssrf_fetch_chain()`, ends with `result` holding the chain's
+final outcome: a response, a refusal or a failure, whichever call returned
+it. A redirect hop can be refused like any other: `"downgrade"` for `https`
+to `http`, or any code a first hop can get. Log a refusal's `code` or a
+failure's `cause` for the operator, and show an untrusted party only
+`ssrf_public_reason(result)`. The `url` of a redirect hop is the `Location`
+exactly as `binding$state$location` holds it; a different URL is an error,
+and starts a new chain instead. The chain's `max_redirects` and
+`total_timeout` are fixed by its first hop: once `max_redirects` redirects
+have been followed, `ssrf_fetch()` refuses the next `3xx` as
+`"redirect-limit"`, and a policy that restates either budget differently
+mid-chain is an error.
+
+## What the guard cannot protect
+
+`ssrfr` guards only requests made through a binding. These stay unguarded,
+and an application that lets an attacker influence the URL must not use them
+for it:
+
+- base R's `download.file()`, `url()`, and `readLines()`, `read.csv()` or
+  `readRDS()` given a URL;
+- direct `curl` calls (`curl::curl_fetch_memory()`, `curl::curl()` and the
+  rest), and the `curl` command-line tool, whether through `system()` or
+  `download.file(method = "curl")`, which also reads `~/.curlrc`;
+- the packages that read URLs through them, such as
+  `jsonlite::fromJSON(url)`, `data.table::fread(url)`, `xml2::read_xml(url)`
+  and `xml2::read_html(url)`.
+
+`ssrfr` is not egress control either: a firewall or a separate network is
+the stronger boundary, and `ssrfr` is defense in depth beside it.
+
+## Testing against a local server
+
+A loopback server is itself a refused destination, so a test that fetches
+one through the guard reopens loopback in its own policy. There is no test
+mode and no switch that turns the guard off; keep this policy in tests:
+
+```{r, eval = FALSE}
+test_policy <- ssrf_policy(allow_ranges = "127.0.0.0/8", allow_ports = 8080)
+binding <- ssrf_prepare_hop("http://127.0.0.1:8080/health", test_policy,
+                            request = list())
+ssrf_fetch(binding)$status
+```
