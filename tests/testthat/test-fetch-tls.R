@@ -208,7 +208,17 @@ test_that("ordinary HTTP still works through the guard", {
   expect_identical(r$status, 200L)
   expect_length(r$body, 0L)
 
-  expect_match(body_text(get("/gzip")), "\"gzipped\": *true")
+  # A gzip body comes from the package's own app: httpbin's is written
+  # through gzcon(), whose output is broken on Windows under R-devel
+  # (r-binding.md §7, Harness notes).
+  gz <- local_test_server()
+  gport <- gz$get_port()
+  gzipped <- guarded_get(
+    pinned_url(gport, "/gzip", host = host),
+    loopback_policy(gport)
+  )
+  expect_identical(gzipped$status, 200L)
+  expect_match(body_text(gzipped), "\"gzipped\": *true")
   expect_identical(get("/status/404")$status, 404L)
   expect_identical(get("/status/500")$status, 500L)
   r <- get("/redirect/2")

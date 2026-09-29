@@ -383,20 +383,25 @@ test_that("a last line with no LF is segmented as the buffer holds it", {
 test_that("the header buffer is segmented in linear time", {
   skip_on_cran()
   block <- "HTTP/1.1 100 X\r\n\r\n"
+  # Seconds a call, from calls repeated until a batch takes 0.25 s: Windows
+  # times in steps of 10 ms, where one 64 KiB call takes about that long
+  # (r-binding.md §7, Harness notes).
   timed <- function(kib) {
     count <- (kib * 1024) %/% nchar(block)
     buffer <- wire(strrep(block, count))
-    runs <- vapply(
-      1:3,
-      function(i) {
-        s <- NULL
-        t <- system.time(s <- ssrfr:::header_segments(buffer))[["elapsed"]]
-        expect_length(s$blocks$start, count)
-        t
-      },
-      numeric(1L)
-    )
-    max(stats::median(runs), 0.001)
+    expect_length(ssrfr:::header_segments(buffer)$blocks$start, count)
+    reps <- 1L
+    repeat {
+      t <- system.time(
+        for (i in seq_len(reps)) {
+          ssrfr:::header_segments(buffer)
+        }
+      )[["elapsed"]]
+      if (t >= 0.25 || reps >= 256L) {
+        return(max(t, 0.001) / reps)
+      }
+      reps <- reps * 2L
+    }
   }
   small <- timed(64)
   large <- timed(512)

@@ -132,6 +132,20 @@ test_app <- function() {
     res$set_type("application/octet-stream")
     res$send(memCompress(raw(2e6), "gzip"))
   })
+  app$get("/gzip", function(req, res) {
+    # The gzip format (RFC 1952), written by gzfile(). memCompress() writes
+    # the zlib format, and gzcon() on a file connection wrote a zeroed
+    # trailer on Windows under R-devel (r-binding.md §7, Harness notes),
+    # which is why webfakes' own httpbin /gzip cannot be decoded there.
+    path <- tempfile(fileext = ".gz")
+    on.exit(unlink(path))
+    con <- gzfile(path, open = "wb")
+    writeBin(charToRaw("{\"gzipped\": true}"), con)
+    close(con)
+    res$set_header("Content-Encoding", "gzip")
+    res$set_type("application/json")
+    res$send(readBin(path, "raw", file.size(path)))
+  })
   app$get("/deflate", function(req, res) {
     # HTTP's `deflate` is the zlib format, which memCompress() writes.
     res$set_header("Content-Encoding", "deflate")
