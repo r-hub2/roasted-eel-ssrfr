@@ -330,10 +330,13 @@ test_that("every active L2 verdict vector is decided at L2 with its code", {
     expect_identical(got$hop, if (zero) 1L else 2L, label = label)
     expect_identical(got$queries, character(), label = label)
   }
-  skip_if(length(untrusted) > 0L, paste(
-    "not decided, the fixture CA cannot be trusted:",
-    paste(untrusted, collapse = ", ")
-  ))
+  skip_if(
+    length(untrusted) > 0L,
+    paste(
+      "not decided, the fixture CA cannot be trusted:",
+      paste(untrusted, collapse = ", ")
+    )
+  )
 })
 
 test_that("every redirect verdict vector is decided through the guarded hop", {
@@ -359,10 +362,13 @@ test_that("every redirect verdict vector is decided through the guarded hop", {
       rows$verdict[i] == "refuse" && inspect_row(rows[i, ]) != "-"
     expect_length(got$queries, if (decided_early) 0L else 1L)
   }
-  skip_if(length(untrusted) > 0L, paste(
-    "not decided, the fixture CA cannot be trusted:",
-    paste(untrusted, collapse = ", ")
-  ))
+  skip_if(
+    length(untrusted) > 0L,
+    paste(
+      "not decided, the fixture CA cannot be trusted:",
+      paste(untrusted, collapse = ", ")
+    )
+  )
   expect_identical(sum(via == "from"), 28L)
   expect_identical(sum(via == "fetch"), 2L)
   expect_identical(sum(via == "first"), 1L)
