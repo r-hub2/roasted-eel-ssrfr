@@ -30,7 +30,7 @@ Config/testthat/edition: 3
 VignetteBuilder: knitr
 Config/roxygen2/version: 8.0.0
 NeedsCompilation: no
-Packaged: 2026-09-29 19:58:47 UTC; bartturczynski
+Packaged: 2026-09-29 20:08:37 UTC; bartturczynski
 Author: Bart Turczynski [aut, cre] (ORCID:
     <https://orcid.org/0000-0002-8788-7980>)
 Maintainer: Bart Turczynski <bartek@turczynski.pl>
