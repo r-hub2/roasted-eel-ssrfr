@@ -95,6 +95,60 @@ test_that("fullwidth separators in a host refuse as parse whatever rurl says", {
   }
 })
 
+# r-binding.md §7: a wire string or parsed host that is not printable ASCII
+# refuses as `parse` (a MUST-test), before any resolver call (§4.1, INV-6;
+# design/evidence/2026-09-29-wire-ascii.R). The first case holds only through
+# the rule on the string: libcurl's parse is made to return the A-label, so
+# the two hosts agree.
+test_that("a wire string or host that is not printable ASCII refuses", {
+  curl <- new.env()
+  curl$calls <- 0L
+  local_mocked_bindings(
+    dep_nslookup = function(query) stop("resolver called"),
+    dep_rurl_serialize = function(url) "http://bücher.invalid/",
+    dep_curl_parse = function(url) {
+      curl$calls <- curl$calls + 1L
+      list(scheme = "http", host = "xn--bcher-kva.invalid")
+    }
+  )
+  res <- ssrf_inspect_url("http://xn--bcher-kva.invalid/")
+  expect_identical(res$code, "parse")
+  expect_identical(res$detail$check, "wire-ascii")
+  expect_identical(curl$calls, 0L)
+
+  # An ASCII string whose host libcurl percent-decodes, through the real
+  # curl_parse_url(): the rule on the parsed host refuses it.
+  local_mocked_bindings(
+    dep_rurl_serialize = function(url) "http://b%C3%BCcher.invalid/",
+    dep_curl_parse = function(url) curl::curl_parse_url(url)
+  )
+  res <- ssrf_inspect_url("http://xn--bcher-kva.invalid/")
+  expect_identical(res$code, "parse")
+  expect_true(res$detail$check %in% c("agreement", "transport-parse"))
+})
+
+# INV-11: a byte that is not UTF-8, in the wire string or in libcurl's host,
+# refuses rather than raising.
+test_that("a wire string or parsed host that is not UTF-8 refuses as parse", {
+  bad <- "http://b\xffcher.invalid/"
+  local_mocked_bindings(
+    dep_nslookup = function(query) stop("resolver called"),
+    dep_rurl_serialize = function(url) bad
+  )
+  res <- ssrf_inspect_url("http://xn--bcher-kva.invalid/")
+  expect_identical(res$code, "parse")
+  expect_identical(res$detail$check, "wire-ascii")
+
+  host <- "b\xffcher.invalid"
+  local_mocked_bindings(
+    dep_rurl_serialize = function(url) "http://xn--bcher-kva.invalid/",
+    dep_curl_parse = function(url) list(scheme = "http", host = host)
+  )
+  res <- ssrf_inspect_url("http://xn--bcher-kva.invalid/")
+  expect_identical(res$code, "parse")
+  expect_identical(res$detail$check, "agreement")
+})
+
 # INV-3: every spelling of an address is one value and one verdict. The
 # corpus's ipv6-spelling rows are the inherited tables; these add each
 # address's spellings side by side.

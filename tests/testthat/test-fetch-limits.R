@@ -751,6 +751,101 @@ test_that("a stop at a limit never runs the error hook", {
   }
 })
 
+# r-binding.md §7: a stop in the write callback ends the transfer there,
+# through R's `abort` restart, which curl's R_tryEval() evaluation stops at:
+# a short write, never an R condition. curl does not document that
+# evaluation, so this runs the fetch in a subprocess whose options(error = )
+# hook quits it: a restart that escaped, or a condition raised, would end the
+# process before the marker. Against a gzip bomb stopped at max_response_size,
+# the refusal is today's, libcurl reports its write error, and it reads no
+# more than one buffer after the stop, where recording the stop alone let it
+# read ten (design/evidence/2026-09-29-abort-post-stop-reads.txt).
+test_that("a stop in the write callback aborts, without the error hook", {
+  skip_if_not_installed("callr")
+  bomb <- memCompress(raw(5e7), "gzip")
+  server <- local_raw_server(c(
+    wire(
+      "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: ",
+      length(bomb),
+      "\r\nConnection: close\r\n\r\n"
+    ),
+    bomb
+  ))
+  # The package under test: installed under R CMD check, a source tree under
+  # test_local().
+  path <- getNamespaceInfo("ssrfr", "path")
+  hooked <- tempfile("hook-ran-")
+  out <- callr::r(
+    function(path, port, hooked) {
+      options(error = function() {
+        file.create(hooked)
+        quit("no", status = 3L)
+      })
+      if (dir.exists(file.path(path, "Meta"))) {
+        loadNamespace("ssrfr", lib.loc = dirname(path))
+      } else {
+        pkgload::load_all(path, quiet = TRUE)
+      }
+      seen <- new.env()
+      seen$stopped <- FALSE
+      seen$after <- 0
+      seen$cleanup <- FALSE
+      transfer <- ssrfr:::dep_curl_transfer
+      policy <- ssrfr::ssrf_policy(
+        allow_ranges = "127.0.0.0/8",
+        allow_ports = port,
+        max_response_size = 1e5
+      )
+      r <- testthat::with_mocked_bindings(
+        tryCatch(
+          ssrfr::ssrf_fetch(ssrfr::ssrf_prepare_hop(
+            paste0("http://127.0.0.1:", port, "/"),
+            policy,
+            request = list()
+          )),
+          finally = seen$cleanup <- TRUE
+        ),
+        dep_curl_transfer = function(opts, on_body, debug, progress) {
+          counted <- function(x, received) {
+            go <- on_body(x, received)
+            seen$stopped <- !isTRUE(go)
+            go
+          }
+          # Type 3 is the wire bytes libcurl reads (CURLINFO_DATA_IN).
+          traced <- function(type, msg) {
+            if (type == 3L && seen$stopped) {
+              seen$after <- seen$after + length(msg)
+            }
+            debug(type, msg)
+          }
+          t <- transfer(opts, counted, traced, progress)
+          seen$error <- t$error
+          t
+        },
+        .package = "ssrfr"
+      )
+      list(
+        ending = paste(r$cause, r$detail$check, r$detail$limit),
+        error = seen$error,
+        after = seen$after,
+        cleanup = seen$cleanup,
+        marker = "after the transfer"
+      )
+    },
+    args = list(path = path, port = server$port, hooked = hooked)
+  )
+  expect_false(file.exists(hooked))
+  expect_identical(out$marker, "after the transfer")
+  expect_true(out$cleanup)
+  expect_identical(
+    out$ending,
+    "response-too-large decoded-bytes max_response_size"
+  )
+  expect_identical(out$error, "curl_error_write_error")
+  # libcurl's default buffer, 16 KiB, is the most one read can take.
+  expect_lte(out$after, 16384)
+})
+
 # The header buffer holds every header block, each ended by an empty line,
 # then a chunked body's trailer lines, which no empty line ends. A trailer
 # line shaped like a status line opens no block: it is a field, on a

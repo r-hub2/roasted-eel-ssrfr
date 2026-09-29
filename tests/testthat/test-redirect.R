@@ -677,18 +677,18 @@ test_that("past the budget, a 3xx refuses whatever follows its status", {
         as.raw(rep(0x61, 5000L))
       ),
       budget_left = "response-too-large",
-      stopped = TRUE
+      stopped = "write"
     ),
     "a body that stalls" = list(
       bytes = stall_after(c(head, wire("ab"))),
       budget_left = "timeout",
-      stopped = TRUE
+      stopped = "write"
     ),
     # No body byte arrives: the progress callback decides.
     "a body that never starts" = list(
       bytes = stall_after(head),
       budget_left = "timeout",
-      stopped = TRUE
+      stopped = "progress"
     )
   )
   for (label in names(cases)) {
@@ -712,10 +712,16 @@ test_that("past the budget, a 3xx refuses whatever follows its status", {
       expect_identical(b$state$pin_used, "127.0.0.1", label = label)
       expect_true(b$state$status %in% c(302L, 307L), label = label)
       expect_false(b$state$fetched, label = label)
-      if (isTRUE(case$stopped)) {
-        # Stopped by ssrfr's record, not ended by libcurl's timer.
+      if (!is.null(case$stopped)) {
+        # Stopped by ssrfr's record, not ended by libcurl's timer: a stop at
+        # a delivery ends in the write callback, as a write error; one in
+        # the progress callback, with no delivery after it, at the loop.
         expect_true(last$aborted, label = label)
-        expect_null(last$error, label = label)
+        if (case$stopped == "write") {
+          expect_identical(last$error, "curl_error_write_error", label = label)
+        } else {
+          expect_null(last$error, label = label)
+        }
       }
     })
   }

@@ -156,20 +156,29 @@ dep_nslookup <- function(query) {
 # aborted as an abort by callback, which curl raises as an interrupt. So
 # every stop takes one path. When `on_body` or `progress` answers anything but
 # TRUE, or fails, or `debug` fails, this wrapper records the stop, a failure
-# under the callback's name, and calls neither `on_body` nor `progress` again:
-# later deliveries are dropped unread. The loop below, which runs one round
-# of libcurl at a time, then cancels the transfer, so it ends within the
-# round the stop came in. Each callback runs with interrupts suspended: a
-# top-level call would otherwise swallow a user's interrupt that R acted on
-# inside it, so it stays pending until curl or the loop checks for it,
-# outside any callback, and propagates, leaving the caller to find the
+# under the callback's name, and calls neither `on_body` nor `progress` again.
+# The write callback then ends the transfer, on the delivery that stopped it
+# or the first one after a stop elsewhere, by invoking R's `abort` restart.
+# curl evaluates the write callback through R_tryEval(), so the jump ends
+# there, with no condition signalled and no hook run, and curl returns a
+# short write, which libcurl fails as a write error without reading further
+# (design/evidence/2026-09-29-abort-post-stop-reads.txt). curl documents
+# none of this, so a test with a quitting hook checks it. curl evaluates its
+# final, empty delivery with Rf_eval(), where an abort would escape, so that
+# one never aborts. A stop with no delivery after it ends at the loop below,
+# which runs one round of libcurl at a time and then cancels the transfer,
+# within the round the stop came in. Each callback runs with interrupts
+# suspended: a top-level call would otherwise swallow a user's interrupt that
+# R acted on inside it, so it stays pending until curl or the loop checks for
+# it, outside any callback, and propagates, leaving the caller to find the
 # binding spent. However the call ends, an interrupt included, every handle
 # still in the pool is cancelled, which closes its connection.
 #
 # Returns a list: `aborted` (TRUE when a callback ended the transfer),
 # `failed` (the labels of the callbacks that raised an error, in the order
 # they first did, or NULL: "data" for `on_body`, "progress" and "debug"),
-# `error` (the curl error class of a failed transfer, or NULL),
+# `error` (the curl error class of a failed transfer, or NULL:
+# `curl_error_write_error` when the write callback ended a stopped one),
 # `status`, `headers` (the raw response header bytes), and `connect`
 # (seconds until the TCP connection was established; 0 when it never was).
 dep_curl_transfer <- function(opts, on_body, debug, progress) {
@@ -204,17 +213,26 @@ dep_curl_transfer <- function(opts, on_body, debug, progress) {
     TRUE
   }
   deliver <- function(x, final = FALSE) {
-    # curl's final delivery carries no bytes and is not a write callback.
-    if (final || outcome$stopped) {
+    # curl's final delivery carries no bytes and is not a write callback;
+    # curl makes one after an abort as well, and it is never aborted.
+    if (final) {
       return(invisible())
     }
-    suspendInterrupts({
-      outcome$events <- outcome$events + 1L
-      # "data", curl's name for this callback, is the label a failure
-      # records and detail$callback reports; it is not the parameter's name.
-      go <- answers_true("data", function() on_body(x, received))
-      outcome$stopped <- !go
-    })
+    if (!outcome$stopped) {
+      suspendInterrupts({
+        outcome$events <- outcome$events + 1L
+        # "data", curl's name for this callback, is the label a failure
+        # records and detail$callback reports; it is not the parameter's
+        # name.
+        go <- answers_true("data", function() on_body(x, received))
+        outcome$stopped <- !go
+      })
+    }
+    # A stopped transfer ends here, a short write: libcurl fails it as a
+    # write error and reads nothing more.
+    if (outcome$stopped) {
+      invokeRestart("abort")
+    }
     invisible()
   }
   # The trace is the pin's only evidence (R/fetch.R), so a `debug` that

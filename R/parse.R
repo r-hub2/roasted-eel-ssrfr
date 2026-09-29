@@ -6,11 +6,13 @@
 # refuses as `parse`, layer 2 other than `admitted` as `scheme` (§6.5); a rurl
 # warning or parse_status never refuses (r-binding.md §2.2). rurl's
 # serialization, with the fragment removed (§2.3), is the wire string libcurl
-# is handed, and its host is the A-label (§4.1). curl_parse_url() of that exact
-# string supplies the host the transport dials and the scheme, userinfo and
-# port that steps 3-5 read (§12). The two parsers' hosts must be one value,
-# addresses compared as raddr values and names as lowercase A-labels, or the
-# hop refuses as `parse` (§4.1, INV-1, INV-2).
+# is handed, and its host is the A-label (§4.1). That string, and the host
+# curl_parse_url() returns from it, must be printable ASCII, or the hop refuses
+# as `parse` (§4.1). curl_parse_url() of that exact string supplies the host
+# the transport dials and the scheme, userinfo and port that steps 3-5 read
+# (§12). The two parsers' hosts must be one value, addresses compared as raddr
+# values and names as lowercase A-labels, or the hop refuses as `parse` (§4.1,
+# INV-1, INV-2).
 
 # rurl's numeric-literal shape diagnostics (r-binding.md §2.3): any of them on
 # the host the hop received refuses as `numeric-literal` (§12 step 6).
@@ -126,7 +128,13 @@ parse_boundary <- function(url) {
   # The target URI carries no fragment (§2.3). In a WHATWG serialization every
   # other `#` is percent-encoded; a host rurl left holding one (RURL-crsrkcoh)
   # is cut short here and then fails the agreement check below.
-  wire <- sub("#.*$", "", wire)
+  wire <- sub("#.*$", "", wire, useBytes = TRUE)
+  # §4.1: the string libcurl is handed must be printable ASCII, read before
+  # curl_parse_url() sees it. A U-label reaching libcurl can defeat the
+  # connect_to pin even when libcurl's parse returns the A-label (INV-6).
+  if (!printable_ascii(wire)) {
+    return(refuse("parse", "wire-ascii"))
+  }
   theirs <- read_curl_parse(wire)
   if (is.null(theirs)) {
     return(refuse("parse", "transport-parse"))
@@ -171,6 +179,17 @@ parse_boundary <- function(url) {
   )
 }
 
+# Whether `x` is printable ASCII, U+0021 to U+007E (§4.1). Read as bytes, so
+# a string that is not valid UTF-8 gives FALSE rather than an error; any error
+# still gives FALSE, a refusal (INV-11).
+printable_ascii <- function(x) {
+  is_string(x) &&
+    isTRUE(tryCatch(
+      !grepl("[^\\x21-\\x7e]", x, perl = TRUE, useBytes = TRUE),
+      error = function(e) FALSE
+    ))
+}
+
 unbracket <- function(host) {
   sub("^\\[(.*)\\]$", "\\1", host)
 }
@@ -179,14 +198,17 @@ unbracket <- function(host) {
 # both addresses equal as raddr values; or both the same name, compared as
 # lowercase strings. rurl's host is the A-label, so a name that is not
 # printable ASCII has no A-label and never agrees: the wire string must carry
-# the A-label (§4.1, §5.0). NA when raddr parsed both and then failed to
-# format one (§6.5: `malformed-address`).
+# the A-label (§4.1, §5.0). The ASCII test on libcurl's host is the second
+# half of §4.1's printable-ASCII rule, the first being parse_boundary()'s on
+# the wire string: libcurl percent-decodes the host, so an ASCII string can
+# still parse to a host that is not. NA when raddr parsed both and then failed
+# to format one (§6.5: `malformed-address`).
 hosts_agree <- function(ours, theirs) {
   absent <- function(h) is.null(h) || is.na(h) || !nzchar(h)
   if (absent(ours) || absent(theirs)) {
     return(absent(ours) && absent(theirs))
   }
-  if (grepl("[^\\x21-\\x7e]", paste0(ours, theirs), perl = TRUE)) {
+  if (!printable_ascii(ours) || !printable_ascii(theirs)) {
     return(FALSE)
   }
   a <- canonical_address(unbracket(ours))
