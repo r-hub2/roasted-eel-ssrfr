@@ -67,22 +67,72 @@ new_finding <- function(
 # list: `finding`, NULL when no gate refuses, and `facts`, what raddr
 # reported (NULL when raddr failed).
 address_gates <- function(text, policy) {
-  malformed <- function(facts = NULL) {
-    list(
-      finding = new_finding(
-        "malformed-address",
-        8L,
-        address = text,
-        gate = "1b",
-        tier = 1L
-      ),
-      facts = facts
-    )
+  read <- address_gates_read(text)
+  if (is.null(read)) {
+    return(address_gates_malformed(text))
   }
+  refused <- address_gates_tier1(read)
+  if (!is.null(refused)) {
+    return(refused)
+  }
+  address_gates_policy(read, policy)
+}
+
+# address_gates()'s `malformed-address` result: gate 1b, tier 1, with the
+# facts raddr reported, or NULL when it failed before reporting them.
+address_gates_malformed <- function(text, facts = NULL) {
+  list(
+    finding = new_finding(
+      "malformed-address",
+      8L,
+      address = text,
+      gate = "1b",
+      tier = 1L
+    ),
+    facts = facts
+  )
+}
+
+# What raddr reports about `text`: its parsed value `addr`, `family`,
+# `reach`, `category`, `embeddings`, its own provider `endpoint` (NA when
+# none), the `embedded` provider endpoints, all `endpoints` together, and
+# the `facts` address_gates() returns. NULL when any raddr reading fails.
+address_gates_read <- function(text) {
   addr <- read_address(text)
   if (is.null(addr)) {
-    return(malformed())
+    return(NULL)
   }
+  own <- address_gates_classify(addr)
+  if (is.null(own)) {
+    return(NULL)
+  }
+  embedded <- embedded_endpoints(own$embeddings)
+  if (is.null(embedded)) {
+    return(NULL)
+  }
+  endpoint <- own$endpoint
+  c(
+    list(text = text, addr = addr),
+    own,
+    list(
+      embedded = embedded,
+      endpoints = c(endpoint[!is.na(endpoint)], embedded),
+      facts = list(
+        address = text,
+        family = own$family,
+        reachability = own$reach,
+        category = own$category,
+        embeddings = own$embeddings,
+        provider_endpoint = endpoint
+      )
+    )
+  )
+}
+
+# raddr's facts about the parsed address `addr` itself: `reach`,
+# `category`, `family`, `embeddings` and its provider `endpoint` (NA when
+# none). NULL when any reading fails.
+address_gates_classify <- function(addr) {
   reach <- read_reachability(addr)
   category <- read_category(addr)
   family <- read_family(addr)
@@ -94,71 +144,101 @@ address_gates <- function(text, policy) {
       is.null(embeddings) ||
       is.null(endpoint)
   ) {
-    return(malformed())
+    return(NULL)
   }
-  embedded <- embedded_endpoints(embeddings)
-  if (is.null(embedded)) {
-    return(malformed())
-  }
-  endpoints <- c(endpoint[!is.na(endpoint)], embedded)
-  facts <- list(
-    address = text,
-    family = family,
-    reachability = reach,
+  list(
+    reach = reach,
     category = category,
+    family = family,
     embeddings = embeddings,
-    provider_endpoint = endpoint
+    endpoint = endpoint
   )
-  refuse <- function(code, gate, tier) {
-    detail <- list(gate = gate, tier = tier, category = category)
-    if (nrow(embeddings)) {
-      detail$embedding_kind <- embeddings$kind[[1L]]
-    }
-    if (identical(code, "cloud-metadata") && length(endpoints)) {
-      detail$provider_kind <- provider_kind(endpoints[[1L]])
-    }
-    finding <- do.call(new_finding, c(list(code, 8L, address = text), detail))
-    list(finding = finding, facts = facts)
-  }
-  admit <- list(finding = NULL, facts = facts)
+}
 
-  # Tier 1 (§5.0): reachability NA, or FALSE or a provider endpoint derived
-  # from an embedded address. No rule of the policy reaches it.
-  if (is.na(reach) || anyNA(embeddings$reachability)) {
-    return(refuse(fact_code(embeddings, category, endpoints), "1b", 1L))
+# address_gates()'s refusal as `code` at `gate` and `tier`, with the detail
+# the facts in `read` carry: the category, the first embedding's kind, and
+# for `cloud-metadata` the provider kind of the first endpoint.
+address_gates_refuse <- function(read, code, gate, tier) {
+  detail <- list(gate = gate, tier = tier, category = read$category)
+  if (nrow(read$embeddings)) {
+    detail$embedding_kind <- read$embeddings$kind[[1L]]
   }
-  if (length(embedded)) {
-    return(refuse("cloud-metadata", "2", 1L))
+  if (identical(code, "cloud-metadata") && length(read$endpoints)) {
+    detail$provider_kind <- provider_kind(read$endpoints[[1L]])
+  }
+  finding <- do.call(
+    new_finding,
+    c(list(code, 8L, address = read$text), detail)
+  )
+  list(finding = finding, facts = read$facts)
+}
+
+# Tier 1 (§5.0): reachability NA, or FALSE or a provider endpoint derived
+# from an embedded address. No rule of the policy reaches it. A refusal, or
+# NULL when tier 1 does not refuse.
+address_gates_tier1 <- function(read) {
+  embeddings <- read$embeddings
+  if (is.na(read$reach) || anyNA(embeddings$reachability)) {
+    code <- fact_code(embeddings, read$category, read$endpoints)
+    return(address_gates_refuse(read, code, "1b", 1L))
+  }
+  if (length(read$embedded)) {
+    return(address_gates_refuse(read, "cloud-metadata", "2", 1L))
   }
   if (!all(embeddings$reachability)) {
-    return(refuse(fact_code(embeddings, category, endpoints), "1c", 1L))
+    code <- fact_code(embeddings, read$category, read$endpoints)
+    return(address_gates_refuse(read, code, "1c", 1L))
   }
+  NULL
+}
 
-  # Tier 2: a caller deny range.
-  denied <- read_within_any(addr, policy$deny_ranges)
+# Tiers 2-4 (§5.0) on an address tier 1 passed: the caller's deny ranges,
+# then its allow ranges against the built-ins. A refusal, or the admission.
+address_gates_policy <- function(read, policy) {
+  refused <- address_gates_tier2(read, policy)
+  if (!is.null(refused)) {
+    return(refused)
+  }
+  address_gates_tiers34(read, policy)
+}
+
+# Tier 2: a caller deny range. A refusal, or NULL when no deny range holds
+# the address.
+address_gates_tier2 <- function(read, policy) {
+  denied <- read_within_any(read$addr, policy$deny_ranges)
   if (is.null(denied)) {
-    return(malformed(facts))
+    return(address_gates_malformed(read$text, read$facts))
   }
   if (denied) {
-    return(refuse("range-denied", "3", 2L))
+    return(address_gates_refuse(read, "range-denied", "3", 2L))
   }
+  NULL
+}
+
+# Tiers 3 and 4 on an address no deny range holds: a refusal, or the
+# admission.
+address_gates_tiers34 <- function(read, policy) {
+  addr <- read$addr
+  endpoint <- read$endpoint
 
   # Tier 3: a caller allow range overrides tier 4 for this address, except
   # that only an exact entry reopens a provider endpoint.
   allowed <- read_within_any(addr, policy$allow_ranges)
+  family <- read$family
   exact <- if (is.na(endpoint)) FALSE else exact_allow(addr, family, policy)
   if (is.null(allowed) || is.null(exact)) {
-    return(malformed(facts))
+    return(address_gates_malformed(read$text, read$facts))
   }
 
   # Tier 4: the built-ins, gate 2's table and gate 1a.
   if (!is.na(endpoint) && !exact) {
-    return(refuse("cloud-metadata", "2", 4L))
+    return(address_gates_refuse(read, "cloud-metadata", "2", 4L))
   }
-  if (allowed || reach) {
-    return(admit)
+  if (allowed || read$reach) {
+    return(list(finding = NULL, facts = read$facts))
   }
-  refuse(fact_code(embeddings, category, endpoints), "1a", 4L)
+  code <- fact_code(read$embeddings, read$category, read$endpoints)
+  address_gates_refuse(read, code, "1a", 4L)
 }
 
 # §6.5's mapping for a refusal that the reachability facts carry. The most

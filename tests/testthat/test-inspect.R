@@ -71,11 +71,20 @@ test_that("the refusal-carrying facts name gate, tier and embedding", {
 test_that("fullwidth separators in a host refuse as parse whatever rurl says", {
   separators <- c("＃", "／", "？", "：")
   urls <- paste0("http://127.0.0.1", separators, ".evil.example/")
+  # rurl 3.1.0 fails to parse these hosts (RURL-crsrkcoh), so its layer-1
+  # verdict refuses them.
   for (url in urls) {
-    expect_identical(ssrf_inspect_url(url)$code, "parse", label = url)
+    res <- ssrf_inspect_url(url)
+    expect_identical(res$code, "parse", label = url)
+    expect_identical(res$detail$check, "syntax", label = url)
   }
-  # rurl's layer-1 verdict made to pass: the refusal still comes from the
-  # parse boundary, the two parsers' disagreement or libcurl's own failure.
+  # rurl answering as 3.0.1 did: the layer-1 verdict passes, and the host keeps
+  # the separator mapped to ASCII, which the serialization then carries. The
+  # refusal still comes from the parse boundary, the two parsers'
+  # disagreement or libcurl's own failure.
+  mapped <- function(url) {
+    chartr("＃／？：", "#/?:", sub("^http://([^/]*)/$", "\\1", url))
+  }
   local_mocked_bindings(
     dep_rurl_verdicts = function(url) {
       data.frame(
@@ -83,7 +92,9 @@ test_that("fullwidth separators in a host refuse as parse whatever rurl says", {
         layer2_policy_verdict = "admitted",
         layer3_annotation_state = "not-applicable"
       )
-    }
+    },
+    dep_rurl_parse = function(url) list(host = mapped(url), is_ip_host = FALSE),
+    dep_rurl_serialize = function(url) paste0("http://", mapped(url), "/")
   )
   for (url in urls) {
     res <- ssrf_inspect_url(url)
@@ -93,6 +104,46 @@ test_that("fullwidth separators in a host refuse as parse whatever rurl says", {
       label = url
     )
   }
+})
+
+# §4.1, INV-11: a host rurl leaves absent is never read as no host to check.
+# rurl's verdict is made to pass with no host, and the wire string keeps a
+# zone ID, from which libcurl's real parse drops the zone and returns the bare
+# address: the two parsers disagree, so the hop refuses before the address
+# gates, whatever that address is. With no host from libcurl either, a web URL
+# still refuses.
+test_that("a parse that passes with no host refuses as parse", {
+  local_mocked_bindings(
+    dep_nslookup = function(query) stop("resolver called"),
+    dep_rurl_verdicts = function(url) {
+      data.frame(
+        layer1_syntax_verdict = "pass",
+        layer2_policy_verdict = "admitted",
+        layer3_annotation_state = "not-applicable"
+      )
+    },
+    dep_rurl_parse = function(url) {
+      list(host = NA_character_, is_ip_host = FALSE)
+    },
+    dep_rurl_serialize = function(url) url
+  )
+  urls <- c(
+    "http://[::1%25lo0]/",
+    "http://[fd00:ec2::254%25lo0]/",
+    "http://[2606:4700:4700::1111%25eth0]/"
+  )
+  for (url in urls) {
+    res <- ssrf_inspect_url(url)
+    expect_identical(res$code, "parse", label = url)
+    expect_identical(res$detail$check, "agreement", label = url)
+  }
+
+  local_mocked_bindings(
+    dep_curl_parse = function(url) list(scheme = "http", host = NULL)
+  )
+  res <- ssrf_inspect_url("http://metadata.google.internal/")
+  expect_identical(res$code, "parse")
+  expect_identical(res$detail$check, "transport-parse")
 })
 
 # r-binding.md §7: a wire string or parsed host that is not printable ASCII
@@ -223,12 +274,12 @@ test_that("every spelling of an address gives one verdict", {
 # (ipaddress and raddr read it as 177.0.0.1; libcurl dials 127.0.0.1). The
 # address layer is fed libcurl's parse of the wire string, never raw input.
 test_that("the address layer reads libcurl's host, never the raw input", {
-  hop <- ssrfr:::parse_hop("http://0177.0.0.1/", ssrf_policy())
+  hop <- parse_hop("http://0177.0.0.1/", ssrf_policy())
   expect_null(hop$finding)
   expect_identical(hop$address, "127.0.0.1")
   expect_identical(hop$wire, "http://127.0.0.1/")
   expect_identical(
-    ssrfr:::address_gates(hop$address, ssrf_policy())$finding$code,
+    address_gates(hop$address, ssrf_policy())$finding$code,
     "loopback"
   )
   # The raw spelling itself refuses first, whatever it decodes to.
@@ -251,7 +302,7 @@ test_that("the wire string carries an ASCII A-label host", {
     "http://BÜCHER.EXAMPLE/x",
     "http://ß.example/"
   )) {
-    hop <- ssrfr:::parse_hop(url, ssrf_policy())
+    hop <- parse_hop(url, ssrf_policy())
     expect_null(hop$finding)
     host <- curl::curl_parse_url(hop$wire)$host
     expect_false(grepl("[^\\x21-\\x7e]", host, perl = TRUE), label = url)
@@ -264,7 +315,240 @@ test_that("the wire string carries an ASCII A-label host", {
     "xn--bcher-kva.example"
   )
   # A host rurl leaves without an A-label never reaches the wire.
-  expect_false(ssrfr:::hosts_agree("bücher.example", "bücher.example"))
+  expect_false(hosts_agree("bücher.example", "bücher.example"))
+})
+
+# A resolver wrapper that answers one public address and counts its calls.
+counting_resolver <- function() {
+  seen <- new.env()
+  seen$calls <- 0L
+  list(
+    seen = seen,
+    fn = function(query) {
+      seen$calls <- seen$calls + 1L
+      "93.184.216.34"
+    }
+  )
+}
+
+# §5.0: a host carrying an `xn--` label that is not a genuine A-label refuses
+# as `parse` at the parse boundary (§12 step 2), on rurl's
+# `domain-invalid-ace-label` diagnostic (rurl 3.1.0, ruling RUL-023), before
+# any resolver call. rurl and libcurl both pass such a host through, so no
+# other check refuses it.
+test_that("an xn-- label that is not an A-label refuses as parse", {
+  resolver <- counting_resolver()
+  local_mocked_bindings(dep_nslookup = resolver$fn)
+  urls <- c(
+    "http://xn--a.example/",
+    "http://xn--.example/",
+    "http://xn--ASCII-.example/",
+    "http://XN--a.example/",
+    "http://xn--xn---ooa.example/",
+    "https://api.xn--a.example:443/x?y#z"
+  )
+  for (url in urls) {
+    res <- ssrf_inspect_url(url, layer = "L1")
+    expect_identical(res$code, "parse", label = url)
+    expect_identical(res$step, 2L, label = url)
+    expect_identical(res$detail$check, "ace-label", label = url)
+  }
+  # A redirect's Location naming such a host, and a relative reference that
+  # takes one from `base`: the absolute URL is what the boundary reads.
+  res <- ssrf_inspect_url(
+    "//xn--a.example/",
+    base = "http://example.com/",
+    layer = "L1"
+  )
+  expect_identical(res$detail$check, "ace-label")
+  res <- ssrf_inspect_url("/x", base = "http://xn--a.example/", layer = "L1")
+  expect_identical(res$code, "parse")
+  expect_identical(res$detail$check, "base")
+  expect_identical(resolver$seen$calls, 0L)
+
+  # The guarded hop refuses it the same way, without resolving the name.
+  r <- ssrf_prepare_hop(
+    "http://xn--a.example/",
+    ssrf_policy(),
+    request = list()
+  )
+  expect_s3_class(r, "ssrfr_refusal")
+  expect_identical(r$code, "parse")
+  expect_identical(resolver$seen$calls, 0L)
+})
+
+# §5.0: a host carrying an empty label refuses as `parse` at the parse
+# boundary, on rurl's `domain-empty-label` diagnostic, before any resolver
+# call. Only one trailing root dot is removed for matching, so `evil.com..`
+# would otherwise miss gate 4 and gate 5 and be resolved (SSRF-qopriinc).
+test_that("a host with an empty label refuses as parse, unresolved", {
+  seen <- mock_answers("93.184.216.34")
+  policy <- ssrf_policy(deny_hosts = "evil.com")
+  urls <- c(
+    "http://evil.com../",
+    "http://evil..com/",
+    "http://.evil.com/",
+    "http://metadata.google.internal../",
+    "http://evil.com。。/",
+    "http://evil.com．．/"
+  )
+  for (url in urls) {
+    r <- ssrf_prepare_hop(url, policy, request = list())
+    expect_s3_class(r, "ssrfr_refusal")
+    expect_identical(r$code, "parse", label = url)
+    expect_identical(r$detail$step, 2L, label = url)
+    expect_identical(r$detail$check, "empty-label", label = url)
+    res <- ssrf_inspect_url(url, policy)
+    expect_identical(res$code, "parse", label = url)
+    expect_identical(res$step, 2L, label = url)
+    expect_identical(res$detail$check, "empty-label", label = url)
+  }
+  # A relative reference whose absolute URL carries one, at L1.
+  res <- ssrf_inspect_url(
+    "//evil.com../",
+    policy,
+    base = "http://example.com/",
+    layer = "L1"
+  )
+  expect_identical(res$detail$check, "empty-label")
+  expect_identical(seen$queries, character())
+
+  # A single trailing root dot is no empty label: it is stripped for matching
+  # and the deny rule refuses, still without resolving.
+  r <- ssrf_prepare_hop("http://evil.com./", policy, request = list())
+  expect_identical(r$code, "host-denied")
+  expect_identical(seen$queries, character())
+})
+
+# §5.0: UTS #46 deletes ignored code points, so a label holding only those is
+# empty in the serialization alone. rurl 3.1.0 fails these at layer 1
+# (`syntax`); a later rurl admits them, and the wire's diagnostics refuse them
+# (`empty-label`). Either way: `parse` at step 2, never resolved.
+test_that("a label emptied by IDNA mapping refuses as parse, unresolved", {
+  seen <- mock_answers("93.184.216.34")
+  policy <- ssrf_policy(deny_hosts = "evil.com")
+  urls <- c(
+    "http://evil.com.%C2%AD./",
+    "http://metadata.google.internal.%C2%AD./",
+    "http://evil.com%2E%2E/",
+    "http://­.evil.com/",
+    "http://evil.­.com/",
+    "http://evil.com.­./",
+    "http://evil.com.​./",
+    "http://evil.com.͏./",
+    "http://evil.com.︀./",
+    "http://evil.com.⁠./"
+  )
+  for (url in urls) {
+    r <- ssrf_prepare_hop(url, policy, request = list())
+    expect_s3_class(r, "ssrfr_refusal")
+    expect_identical(r$code, "parse", label = url)
+    expect_identical(r$detail$step, 2L, label = url)
+    expect_true(
+      r$detail$check %in% c("syntax", "empty-label"),
+      label = url
+    )
+  }
+  expect_identical(seen$queries, character())
+})
+
+# The wire's diagnostics are read as well as the input's: a finding there
+# alone refuses, and so does a reading that fails there alone.
+test_that("the serialization's diagnostics are read too", {
+  resolver <- counting_resolver()
+  wire_only <- function(answer) {
+    function(url) {
+      if (identical(url, "http://example.com/")) answer else character()
+    }
+  }
+  local_mocked_bindings(
+    dep_nslookup = resolver$fn,
+    dep_rurl_diagnostics = wire_only("domain-empty-label")
+  )
+  res <- ssrf_inspect_url("http://EXAMPLE.com/", layer = "L1")
+  expect_identical(res$code, "parse")
+  expect_identical(res$detail$check, "empty-label")
+  local_mocked_bindings(dep_rurl_diagnostics = wire_only(NULL))
+  res <- ssrf_inspect_url("http://EXAMPLE.com/", layer = "L1")
+  expect_identical(res$code, "parse")
+  expect_identical(res$detail$check, "diagnostics")
+  expect_identical(resolver$seen$calls, 0L)
+})
+
+# The diagnostics are read for the absolute URL as well as for the string the
+# hop received: a reading that fails for the absolute URL alone refuses.
+test_that("unreadable diagnostics for the absolute URL refuse as parse", {
+  resolver <- counting_resolver()
+  local_mocked_bindings(
+    dep_nslookup = resolver$fn,
+    dep_rurl_diagnostics = function(url) {
+      if (identical(url, "http://example.com/x")) NULL else character()
+    }
+  )
+  res <- ssrf_inspect_url("/x", base = "http://example.com/", layer = "L1")
+  expect_identical(res$code, "parse")
+  expect_identical(res$step, 2L)
+  expect_identical(res$detail$check, "diagnostics")
+  expect_identical(resolver$seen$calls, 0L)
+})
+
+# §12 step 6 reads the diagnostics of the string the hop received, for its
+# numeric spellings: a reading that fails for that string alone refuses as
+# `parse` at step 6, before any resolver call.
+test_that("unreadable diagnostics for the received string refuse at step 6", {
+  resolver <- counting_resolver()
+  local_mocked_bindings(
+    dep_nslookup = resolver$fn,
+    dep_rurl_diagnostics = function(url) {
+      if (identical(url, "/x")) NULL else character()
+    }
+  )
+  res <- ssrf_inspect_url("/x", base = "http://example.com/", layer = "L1")
+  expect_identical(res$code, "parse")
+  expect_identical(res$step, 6L)
+  expect_identical(res$detail$check, "diagnostics")
+  expect_identical(res$host, "example.com")
+  expect_identical(resolver$seen$calls, 0L)
+})
+
+# §5.0: only an `xn--` label that is not a genuine A-label refuses as `parse`.
+# A genuine A-label, and the strict domain-to-ASCII failures WHATWG accepts (an
+# underscore, an edge hyphen, a label over 63 octets), reach the address gates
+# like any other name.
+test_that("an A-label or a host WHATWG accepts is not an ACE-label refusal", {
+  resolver <- counting_resolver()
+  local_mocked_bindings(dep_nslookup = resolver$fn)
+  urls <- c(
+    "http://xn--bcher-kva.example/",
+    "http://XN--BCHER-KVA.example/",
+    "http://xn--a_-wia.example/",
+    "http://_dmarc.example/",
+    "http://-edge.example/",
+    "http://edge-.example/",
+    paste0("http://", strrep("a", 64), ".example/")
+  )
+  for (url in urls) {
+    res <- ssrf_inspect_url(url, layer = "L1")
+    expect_identical(res$code, NA_character_, label = url)
+    expect_identical(res$cause, NA_character_, label = url)
+  }
+  expect_identical(resolver$seen$calls, length(urls))
+})
+
+# INV-11: when rurl's diagnostics cannot be read, the hop refuses as `parse`
+# before any resolver call, whatever the host.
+test_that("unreadable rurl diagnostics refuse as parse before resolving", {
+  resolver <- counting_resolver()
+  local_mocked_bindings(
+    dep_nslookup = resolver$fn,
+    dep_rurl_diagnostics = function(url) NULL
+  )
+  for (url in c("http://example.com/", "http://xn--bcher-kva.example/")) {
+    res <- ssrf_inspect_url(url, layer = "L1")
+    expect_identical(res$code, "parse", label = url)
+    expect_identical(res$detail$check, "diagnostics", label = url)
+  }
+  expect_identical(resolver$seen$calls, 0L)
 })
 
 # §12: steps 3-5 read the scheme, userinfo and effective port from libcurl's
@@ -299,7 +583,7 @@ test_that("scheme, userinfo and port come from libcurl's parse", {
 })
 
 test_that("the wire string drops the fragment and keeps port and query", {
-  hop <- ssrfr:::parse_hop(
+  hop <- parse_hop(
     "http://Example.COM:8080/a/../b?q=1#frag",
     ssrf_policy(allow_ports = 8080)
   )
@@ -351,20 +635,20 @@ test_that("the URL length limit counts octets before any parse", {
 
 test_that("address_gates() classifies one resolved address for L1", {
   policy <- ssrf_policy(allow_ranges = "10.0.0.0/8")
-  expect_null(ssrfr:::address_gates("10.1.2.3", policy)$finding)
+  expect_null(address_gates("10.1.2.3", policy)$finding)
   expect_identical(
-    ssrfr:::address_gates("10.1.2.3", ssrf_policy())$finding$code,
+    address_gates("10.1.2.3", ssrf_policy())$finding$code,
     "private"
   )
   expect_identical(
-    ssrfr:::address_gates("::ffff:169.254.169.254", policy)$finding$code,
+    address_gates("::ffff:169.254.169.254", policy)$finding$code,
     "cloud-metadata"
   )
   expect_identical(
-    ssrfr:::address_gates("not an address", policy)$finding$code,
+    address_gates("not an address", policy)$finding$code,
     "malformed-address"
   )
-  expect_null(ssrfr:::address_gates("93.184.216.34", policy)$finding)
+  expect_null(address_gates("93.184.216.34", policy)$finding)
 })
 
 test_that("an inspection prints its facts without userinfo", {

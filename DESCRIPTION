@@ -1,36 +1,41 @@
 Package: ssrfr
 Type: Package
 Title: Server-Side Request Forgery Guard for Outbound Requests
-Version: 0.0.0.9000
+Version: 1.0.0
 Authors@R: 
-    person("Bart", "Turczynski", email = "bartek@turczynski.pl", role = c("aut", "cre"),
+    person("Bart", "Turczynski", email = "bartek@turczynski.pl", role = c("aut", "cre", "cph"),
            comment = c(ORCID = "0000-0002-8788-7980"))
 Description: Protects R applications that fetch URLs an attacker can
     influence from server-side request forgery. Each redirect hop is parsed
     once, resolved once, and every resolved address is classified before the
     connection is pinned to a validated address, so a hostname cannot be
     rebound between check and connect. Refusals carry stable reason codes.
-    Under development: the policy, the result model, structural inspection
-    of a URL without network access, resolved inspection of every address a
-    name resolves to, and the guarded fetch of each hop of a redirect
-    chain are implemented.
+    Provides the guarded fetch of each hop of a redirect chain, a helper
+    that follows a whole chain, structural inspection of a URL without
+    network access, and resolved inspection of every address a name
+    resolves to.
 License: MIT + file LICENSE
 URL: https://bart-turczynski.gitlab.io/ssrfr/,
-        https://gitlab.com/bart-turczynski/ssrfr
+        https://gitlab.com/bart-turczynski/ssrfr,
+        https://bart-turczynski.r-universe.dev/ssrfr
 BugReports: https://gitlab.com/bart-turczynski/ssrfr/-/work_items
+X-schema.org-keywords: ssrf, server-side-request-forgery,
+        url-validation, ip-address, dns-rebinding, cloud-metadata,
+        redirects, libcurl, security
 Encoding: UTF-8
 Language: en-US
 Roxygen: list(markdown = TRUE)
-Depends: R (>= 4.0.0)
-Imports: curl (>= 7.0.0), raddr (>= 0.1.2), rurl (>= 3.0.0)
-Suggests: callr, cucumber (>= 2.0.0), httpuv, knitr, pkgload, processx,
-        rmarkdown, testthat (>= 3.0.0), webfakes, withr
+Depends: R (>= 4.1.0)
+Imports: curl (>= 7.0.0), pslr (>= 1.2.2), raddr (>= 0.1.2), rurl (>=
+        3.1.0)
+Suggests: callr, httpuv, knitr, oysteR, pkgload, processx, rmarkdown,
+        rosv, testthat (>= 3.0.0), webfakes (>= 1.4.0), withr
 SystemRequirements: libcurl (>= 7.73.0)
 Config/testthat/edition: 3
 VignetteBuilder: knitr
-Config/roxygen2/version: 8.0.0
+Config/roxygen2/version: 8.1.1
 NeedsCompilation: no
-Packaged: 2026-09-29 22:34:09 UTC; bartturczynski
-Author: Bart Turczynski [aut, cre] (ORCID:
+Packaged: 2026-11-03 12:06:40 UTC; bartturczynski
+Author: Bart Turczynski [aut, cre, cph] (ORCID:
     <https://orcid.org/0000-0002-8788-7980>)
 Maintainer: Bart Turczynski <bartek@turczynski.pl>

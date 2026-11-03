@@ -18,7 +18,7 @@ knitr::opts_chunk$set(
 library(ssrfr)
 ```
 
-`ssrfr` is under development. It guards one hop at a time:
+`ssrfr` guards one hop at a time:
 `ssrf_prepare_hop()` decides whether a URL may be fetched and `ssrf_fetch()`
 fetches it through a pinned connection; a redirect is followed by preparing
 the next hop from the previous one, or by `ssrf_fetch_chain()`, which runs

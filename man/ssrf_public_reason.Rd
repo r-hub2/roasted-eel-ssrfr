@@ -33,11 +33,15 @@ redacted) and \code{detail}. Their \code{print()} and \code{format()} methods sh
 userinfo, request header value, body or proxy value.
 }
 \examples{
-refusal <- ssrfr:::new_ssrf_refusal("loopback", hop = 1, address = "::1")
+# A loopback literal is refused at prepare, before any resolution.
+refusal <- ssrf_prepare_hop(
+  "http://127.0.0.1/admin",
+  ssrf_policy(),
+  request = list()
+)
 refusal$code
 ssrf_public_reason(refusal)
 
-failure <- ssrfr:::new_ssrf_failure("timeout", hop = 2)
-ssrf_public_reason(failure)
+# An operational failure, a timeout say, gives the same string.
 
 }

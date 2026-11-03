@@ -99,7 +99,7 @@ inspect_row <- function(row) {
 # Steps 1-3 of a parse-vector row under the default policy (§7 component 2):
 # "parse", "scheme" or "agree", and the host the guard acts on.
 parse_row <- function(input) {
-  hop <- ssrfr:::parse_hop(unescape_field(input), ssrf_policy())
+  hop <- parse_hop(unescape_field(input), ssrf_policy())
   code <- hop$finding$code
   step <- hop$finding$detail$step
   outcome <- if (
@@ -121,7 +121,7 @@ same_host_value <- function(a, b) {
   if (!is.na(pa) && !is.na(pb)) {
     return(identical(raddr::addr_format(pa), raddr::addr_format(pb)))
   }
-  is.na(pa) && is.na(pb) && identical(tolower(a), tolower(b))
+  is.na(pa) && is.na(pb) && identical(ascii_lower(a), ascii_lower(b))
 }
 
 # Runs `code` with every network entry point of curl and raddr made to fail,

@@ -78,7 +78,7 @@ test_that("a failing raddr wrapper refuses as malformed-address", {
 })
 
 test_that("canonical_address() tells a name from a raddr failure", {
-  canonical <- ssrfr:::canonical_address
+  canonical <- canonical_address
   expect_identical(canonical("0:0:0:0:0:0:0:1"), "::1")
   expect_identical(canonical("127.0.0.1"), "127.0.0.1")
   expect_null(canonical("pinned.example.invalid"))
@@ -108,5 +108,114 @@ test_that("a dependency's warning is muffled and never refuses", {
 test_that("parse_status annotations do not refuse", {
   for (url in c("http://localhost/", "http://internal-api.corp/")) {
     expect_identical(ssrf_inspect_url(url)$code, NA_character_, label = url)
+  }
+})
+
+# A raddr call that fails on one reading only, after the others answered,
+# refuses as `malformed-address` at gate 1b too (§6.5, §8 item 32, INV-11):
+# the embedded address of a mapped or translated literal, the embedding
+# rows' reachability, and a caller range.
+expect_malformed_at_1b <- function(res, label) {
+  expect_identical(res$code, "malformed-address", label = label)
+  expect_identical(res$step, 8L, label = label)
+  expect_identical(res$detail$gate, "1b", label = label)
+  expect_identical(res$detail$tier, 1L, label = label)
+}
+
+test_that("raddr failing on an embedded address refuses as malformed-address", {
+  urls <- c("http://[::ffff:169.254.169.254]/", "http://[64:ff9b::a9fe:a9fe]/")
+  # Read whole, the embedded address is the metadata endpoint.
+  for (url in urls) {
+    expect_identical(ssrf_inspect_url(url)$code, "cloud-metadata", label = url)
+  }
+  pton <- dep_raddr_pton
+  local_mocked_bindings(
+    dep_raddr_pton = function(text) {
+      if (identical(text, "169.254.169.254")) stop("raddr") else pton(text)
+    }
+  )
+  for (url in urls) {
+    expect_malformed_at_1b(ssrf_inspect_url(url), url)
+  }
+})
+
+test_that("raddr failing on embedding reachability refuses as malformed", {
+  reachability <- dep_raddr_reachability
+  local_mocked_bindings(
+    dep_raddr_reachability = function(x) {
+      if (inherits(x, "raddr_embedding")) stop("raddr") else reachability(x)
+    }
+  )
+  # The address's own reachability is read; its NAT64 embedding's is not.
+  expect_malformed_at_1b(
+    ssrf_inspect_url("http://[64:ff9b::5db8:d822]/"),
+    "nat64"
+  )
+  # An address with no embedding never asks for an embedding's.
+  expect_identical(
+    ssrf_inspect_url("http://93.184.216.34/")$code,
+    NA_character_
+  )
+})
+
+test_that("an embedding record of the wrong shape refuses as malformed", {
+  embeddings <- dep_raddr_embeddings
+  rows <- unclass(embeddings(raddr::addr_pton("64:ff9b::5db8:d822"))[[1L]])
+  record <- function(fields) {
+    function(x) list(structure(fields, class = "raddr_embedding"))
+  }
+  shapes <- list(
+    "no address" = rows[c("kind", "role")],
+    "an NA kind" = modifyList(rows, list(kind = NA_character_)),
+    "a short role" = modifyList(rows, list(role = character()))
+  )
+  for (shape in names(shapes)) {
+    local({
+      local_mocked_bindings(dep_raddr_embeddings = record(shapes[[shape]]))
+      expect_malformed_at_1b(
+        ssrf_inspect_url("http://[64:ff9b::5db8:d822]/"),
+        shape
+      )
+    })
+  }
+})
+
+test_that("raddr failing on a caller range refuses with the facts it read", {
+  within <- dep_raddr_within_any
+  local_mocked_bindings(
+    dep_raddr_within_any = function(x, blocks) {
+      if ("10.0.0.0/8" %in% blocks) stop("raddr") else within(x, blocks)
+    }
+  )
+  policies <- list(
+    deny = ssrf_policy(deny_ranges = "10.0.0.0/8"),
+    allow = ssrf_policy(allow_ranges = "10.0.0.0/8")
+  )
+  for (name in names(policies)) {
+    res <- ssrf_inspect_url("http://93.184.216.34/", policies[[name]])
+    expect_malformed_at_1b(res, name)
+    # The reading failed at tier 2 or 3, after raddr reported the facts.
+    expect_identical(res$address$address, "93.184.216.34", label = name)
+    expect_true(res$address$reachability, label = name)
+    expect_identical(res$address$category, "global", label = name)
+  }
+})
+
+# §6.5: a provider endpoint is the most specific fact, so it names the
+# refusal even where an unknown reachability refuses first (gate 1b).
+test_that("a provider endpoint outranks unknown reachability at gate 1b", {
+  local_mocked_bindings(dep_raddr_reachability = function(x) {
+    rep(NA, length(x))
+  })
+  cases <- list(
+    "http://169.254.169.254/" = NULL,
+    "http://[::ffff:169.254.169.254]/" = "ipv4_mapped"
+  )
+  for (url in names(cases)) {
+    res <- ssrf_inspect_url(url)
+    expect_identical(res$code, "cloud-metadata", label = url)
+    expect_identical(res$detail$gate, "1b", label = url)
+    expect_identical(res$detail$provider_kind, "instance-metadata", label = url)
+    expect_identical(res$detail$embedding_kind, cases[[url]], label = url)
   }
 })

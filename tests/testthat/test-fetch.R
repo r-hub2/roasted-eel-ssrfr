@@ -1,5 +1,5 @@
 # ssrf_fetch() end to end (ssrfr-v1.md §2.2, §2.5, §5.3, §6.6, §12 steps
-# 9-12, §14, INV-5, INV-6, INV-9, INV-10, INV-12), and the behaviour tests of
+# 9-12, §14, INV-5, INV-6, INV-9, INV-10, INV-12), and the behavior tests of
 # r-binding.md §7 that need a server. Every server is on loopback, every
 # host a `.invalid` name the resolver mock maps to it, so a fetch that
 # arrives proves the pin was used.
@@ -79,7 +79,7 @@ test_that("a missing trace or another peer is pin-mismatch", {
   web <- local_test_server()
   port <- web$get_port()
   mock_answers("127.0.0.1")
-  transfer <- ssrfr:::dep_curl_transfer
+  transfer <- dep_curl_transfer
   rewrite <- function(fn) {
     local_mocked_bindings(
       dep_curl_transfer = function(opts, on_body, debug, progress) {
@@ -161,7 +161,7 @@ test_that("the transport sends no field the plan did not carry", {
     "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
   )
   fields <- function(head) {
-    tolower(sub(":.*$", "", head[-1L]))
+    ascii_lower(sub(":.*$", "", head[-1L]))
   }
   empty <- local_raw_server(ok)
   r <- guarded_get(
@@ -233,7 +233,7 @@ test_that("the transport sends no field the plan did not carry", {
 # runs them as top-level calls, where no handler of the caller's sees a
 # warning: R prints it later, header bytes and all.
 local_callback_warnings <- function(env = parent.frame()) {
-  transfer <- ssrfr:::dep_curl_transfer
+  transfer <- dep_curl_transfer
   seen <- new.env(parent = emptyenv())
   seen$warnings <- character()
   record <- function(f) {
@@ -353,7 +353,7 @@ test_that("a status that disagrees with the header block is a protocol error", {
 # of the header buffer: the bytes are segmented once, not once for each.
 test_that("a completed transfer's header is segmented once", {
   mock_answers("127.0.0.1")
-  segmenter <- ssrfr:::header_segments
+  segmenter <- header_segments
   calls <- new.env(parent = emptyenv())
   calls$n <- 0L
   local_mocked_bindings(
@@ -430,6 +430,14 @@ scripted_transfer <- function(outcomes, env = parent.frame()) {
         tls = modifyList(
           base,
           list(error = "curl_error_peer_failed_verification", connect = 0.01)
+        ),
+        ssl = modifyList(
+          base,
+          list(error = "curl_error_ssl_connect_error", connect = 0.01)
+        ),
+        recv = modifyList(
+          base,
+          list(error = "curl_error_recv_error", connect = 0.01)
         ),
         ok = {
           headers <- charToRaw(
@@ -566,6 +574,60 @@ test_that("pin-mismatch or an opened connection ends failover", {
   expect_identical(tls$tried, "192.0.2.1")
 })
 
+# §6.6: a transport error once connected is mapped by its curl class. Every
+# curl_error_ssl_* class is `tls-failed` at step 10; a class with no mapping
+# of its own is `protocol-error` at step 12. Neither tries another address.
+test_that("a transport error after connecting maps by its curl class", {
+  cases <- list(
+    ssl = list(cause = "tls-failed", step = 10L),
+    recv = list(cause = "protocol-error", step = 12L)
+  )
+  for (outcome in names(cases)) {
+    local({
+      tried <- scripted_transfer(list(
+        "192.0.2.1" = outcome,
+        "192.0.2.2" = "ok"
+      ))
+      r <- failover_fetch(list("192.0.2.1" = 1, "192.0.2.2" = 1))$result
+      expect_s3_class(r, "ssrfr_failure")
+      expect_identical(r$cause, cases[[outcome]]$cause, label = outcome)
+      expect_identical(r$detail$step, cases[[outcome]]$step, label = outcome)
+      expect_identical(r$detail$check, "transport", label = outcome)
+      expect_identical(tried$addresses, "192.0.2.1", label = outcome)
+    })
+  }
+})
+
+# libcurl may call the write callback with no bytes, for an empty body. Such
+# a delivery is not the first body byte: the header is not read for it.
+test_that("an empty delivery does not start the body", {
+  seen <- new.env(parent = emptyenv())
+  seen$empty <- NULL
+  local_mocked_bindings(
+    dep_curl_transfer = function(opts, on_body, debug, progress) {
+      debug(0L, charToRaw("Trying 192.0.2.1:80...\n"))
+      headers <- wire("HTTP/1.1 200 OK\r\n", "Content-Type: text/plain\r\n\r\n")
+      seen$empty <- on_body(raw(), function() stop("header read"))
+      on_body(charToRaw("hello"), function() headers)
+      list(
+        aborted = FALSE,
+        error = NULL,
+        status = 200L,
+        headers = headers,
+        connect = 0.01
+      )
+    }
+  )
+  local_mocked_bindings(dep_nslookup = function(query) "192.0.2.1")
+  policy <- ssrf_policy(allow_ranges = "192.0.2.0/24")
+  b <- ssrf_prepare_hop("http://empty.invalid/", policy, request = list())
+  r <- ssrf_fetch(b)
+  expect_true(seen$empty)
+  expect_s3_class(r, "ssrfr_response")
+  expect_identical(r$status, 200L)
+  expect_identical(body_text(r), "hello")
+})
+
 test_that("failover reaches the listener after a dead address", {
   skip_if_no_webfakes()
   skip_if_not(isTRUE(curl::curl_version()$ipv6), "libcurl has no IPv6")
@@ -618,7 +680,7 @@ test_that("an error in ssrfr's own callback fails closed and says so", {
   hook <- new.env(parent = emptyenv())
   hook$runs <- 0L
   withr::local_options(error = function() hook$runs <- hook$runs + 1L)
-  transfer <- ssrfr:::dep_curl_transfer
+  transfer <- dep_curl_transfer
   broken <- list(
     data = function(on_body, progress) {
       list(on_body = function(x, ...) stop("a defect"), progress = progress)
@@ -668,7 +730,7 @@ test_that("an error in the trace callback fails closed as pin-mismatch", {
   hook <- new.env(parent = emptyenv())
   hook$runs <- 0L
   withr::local_options(error = function() hook$runs <- hook$runs + 1L)
-  transfer <- ssrfr:::dep_curl_transfer
+  transfer <- dep_curl_transfer
   delivered <- new.env(parent = emptyenv())
   delivered$bytes <- 0L
   local_mocked_bindings(
@@ -722,7 +784,7 @@ test_that("a progress callback that fails on its first call is named", {
   hook$runs <- 0L
   withr::local_options(error = function() hook$runs <- hook$runs + 1L)
   listener <- local_listener()
-  transfer <- ssrfr:::dep_curl_transfer
+  transfer <- dep_curl_transfer
   seen <- new.env(parent = emptyenv())
   seen$calls <- 0L
   seen$trying <- FALSE
@@ -1140,10 +1202,7 @@ test_that("an interrupt leaves the binding spent and no handle open", {
   )
   withr::defer(interrupter$kill())
   # Wait for the server to listen before preparing the hop.
-  t0 <- Sys.time()
-  while (!file.exists(ready) && difftime(Sys.time(), t0, units = "secs") < 20) {
-    Sys.sleep(0.05)
-  }
+  wait_for_ready(ready, server)
   expect_true(file.exists(ready))
   mock_answers("127.0.0.1")
   b <- ssrf_prepare_hop(
@@ -1180,7 +1239,7 @@ test_that("a user interrupt pending when ssrfr stops at a limit propagates", {
     wire("HTTP/1.1 200 OK\r\n"),
     wire("X-Field: ", strrep("v", 50), "\r\n")
   ))
-  transfer <- ssrfr:::dep_curl_transfer
+  transfer <- dep_curl_transfer
   sent <- new.env(parent = emptyenv())
   sent$signal <- FALSE
   local_mocked_bindings(

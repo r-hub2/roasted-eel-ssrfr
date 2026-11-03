@@ -68,7 +68,7 @@ test_that("a redirect hop parses its own URL, not the previous one again", {
   expect_identical(ssrf_fetch(b1)$status, 302L)
   parsed <- new.env(parent = emptyenv())
   parsed$urls <- character()
-  boundary <- ssrfr:::parse_boundary
+  boundary <- parse_boundary
   local_mocked_bindings(parse_boundary = function(url) {
     parsed$urls <- c(parsed$urls, url)
     boundary(url)
@@ -102,10 +102,10 @@ test_that("outcomes on a redirect hop record the resolved URL", {
     expect_identical(b$state$location, location)
     b
   }
-  withheld <- ssrfr:::redact_url("//denied.example.invalid/x")
+  withheld <- redact_url("//denied.example.invalid/x")
   expect_match(withheld, "withheld", fixed = TRUE)
   check_url <- function(out, want, label) {
-    expect_identical(out$url, ssrfr:::redact_url(want), label = label)
+    expect_identical(out$url, redact_url(want), label = label)
     expect_false(grepl("withheld", out$url, fixed = TRUE), label = label)
     shown <- paste(format(out), collapse = "\n")
     expect_match(shown, paste0("url: ", out$url), fixed = TRUE, label = label)
@@ -310,6 +310,7 @@ test_that("the Location is compared as bytes, not as strings", {
   location <- b$state$location
   expect_identical(Encoding(location), "UTF-8")
   latin <- iconv(location, "UTF-8", "latin1")
+  # The premise is base identical()'s own verdict, so it is asserted as such.
   expect_true(identical(latin, location))
   expect_error(
     ssrf_prepare_hop(latin, policy, from = b),
@@ -633,7 +634,7 @@ test_that("a spent budget refuses every 3xx, with or without Location", {
 # the transfer is stopped through the callbacks' record, not left to run.
 test_that("past the budget, a 3xx refuses whatever follows its status", {
   mock_answers("127.0.0.1")
-  transfer <- ssrfr:::dep_curl_transfer
+  transfer <- dep_curl_transfer
   last <- new.env(parent = emptyenv())
   local_mocked_bindings(
     dep_curl_transfer = function(opts, on_body, debug, progress) {
@@ -818,7 +819,7 @@ test_that("a transfer stopped at a 3xx needs its statuses to agree too", {
   short <- c(line, wire("Location: /a\r\nContent-Length: 0\r\n\r\n"))
   long <- c(line, wire(strrep("X-F: 1\r\n", 6), "Location: /a\r\n\r\n"))
   scripted <- new.env(parent = emptyenv())
-  parse <- ssrfr:::parse_response_headers
+  parse <- parse_response_headers
   local_mocked_bindings(
     # A parse that reads `scripted$parsed` as the status, when it is set,
     # and counts its calls.
@@ -946,7 +947,11 @@ test_that("a transfer stopped at a 3xx needs its statuses to agree too", {
     stopped <- do.call(outcome, c(case$args, in_flight = TRUE))
     completed <- do.call(outcome, c(case$args, in_flight = FALSE))
     expect_identical(stopped, case$want, label = label)
-    expect_identical(completed, case$completed %||% case$want, label = label)
+    expect_identical(
+      completed,
+      default_if_null(case$completed, case$want),
+      label = label
+    )
   }
 })
 
@@ -959,8 +964,8 @@ test_that("header_stop decides at the final status line", {
   policy <- ssrf_policy(max_header_fields = 4, max_header_bytes = 200)
   stop_for <- function(text, binding = spent, reported = NULL) {
     seen <- new.env(parent = emptyenv())
-    ssrfr:::measure_header(seen, charToRaw(text))
-    ssrfr:::header_stop(seen, policy, binding, reported)
+    measure_header(seen, charToRaw(text))
+    header_stop(seen, policy, binding, reported)
   }
   many <- strrep("X-F: 1\r\n", 6)
   final <- "HTTP/1.1 302 Found\r\n"
@@ -1035,12 +1040,12 @@ test_that("the status line counts against the header limits it decides", {
   expect_identical(nchar(final, type = "bytes"), 20L)
   stop_for <- function(text, max_bytes, max_fields = 128) {
     seen <- new.env(parent = emptyenv())
-    ssrfr:::measure_header(seen, charToRaw(text))
+    measure_header(seen, charToRaw(text))
     policy <- ssrf_policy(
       max_header_bytes = max_bytes,
       max_header_fields = max_fields
     )
-    ssrfr:::header_stop(seen, policy, spent)
+    header_stop(seen, policy, spent)
   }
   too_large <- list(
     cause = "response-too-large",
@@ -1245,7 +1250,7 @@ test_that("credentials are absent after a cross-origin hop in the raw bytes", {
   # 307 keeps the method, and the body goes with the origin.
   expect_identical(head[[1L]], "POST /landing HTTP/1.1")
   expect_setequal(
-    tolower(sub(":.*$", "", head[-1L])),
+    ascii_lower(sub(":.*$", "", head[-1L])),
     c("host", "user-agent", "accept-encoding", "content-length", "x-trace")
   )
   expect_true("Content-Length: 0" %in% head)
@@ -1363,7 +1368,7 @@ test_that("the method and body transformation follows the status table", {
 # trailing root dot) and effective port are equal.
 test_that("origin equality is scheme, normalized host and effective port", {
   same <- function(a, b) {
-    ssrfr:::same_origin(
+    same_origin(
       list(scheme = a[[1]], host = a[[2]], port = a[[3]]),
       list(scheme = b[[1]], host = b[[2]], port = b[[3]])
     )
@@ -1434,19 +1439,19 @@ test_that("a dropped body takes every field that describes it", {
     method = "POST",
     headers = c(content, `X-Trace` = "t1"),
     body = charToRaw("payload"),
-    carry = tolower(c(names(content), "X-Trace"))
+    carry = ascii_lower(c(names(content), "X-Trace"))
   )
   for (status in c(301L, 303L)) {
-    out <- ssrfr:::redirect_plan(plan, status, cross_origin = FALSE)
+    out <- redirect_plan(plan, status, cross_origin = FALSE)
     expect_named(out$plan$headers, "X-Trace", label = status)
-    expect_setequal(out$record$dropped, tolower(names(content)))
+    expect_setequal(out$record$dropped, ascii_lower(names(content)))
   }
   # Across origins, nomination does not keep them either.
   plan$method <- "PUT"
-  out <- ssrfr:::redirect_plan(plan, 307L, cross_origin = TRUE)
+  out <- redirect_plan(plan, 307L, cross_origin = TRUE)
   expect_named(out$plan$headers, "X-Trace")
   # A kept body keeps them.
-  out <- ssrfr:::redirect_plan(plan, 307L, cross_origin = FALSE)
+  out <- redirect_plan(plan, 307L, cross_origin = FALSE)
   expect_identical(out$plan$headers, plan$headers)
 })
 
@@ -1468,11 +1473,11 @@ test_that("the record names a dropped body only when there was one", {
   for (case in cases) {
     label <- paste(case$status, case$method, case$cross)
     plan$method <- case$method
-    out <- ssrfr:::redirect_plan(plan, case$status, case$cross)
+    out <- redirect_plan(plan, case$status, case$cross)
     expect_false(out$record$body_dropped, label = label)
     expect_identical(out$record$dropped, "content-type", label = label)
     plan$body <- charToRaw("payload")
-    out <- ssrfr:::redirect_plan(plan, case$status, case$cross)
+    out <- redirect_plan(plan, case$status, case$cross)
     expect_true(out$record$body_dropped, label = label)
     expect_null(out$plan$body, label = label)
     plan$body <- NULL
@@ -1585,8 +1590,8 @@ test_that("the documented redirect loops end on the chain's final outcome", {
       class = "ssrfr_response"
     )
   }
-  refusal <- function(code) ssrfr:::new_ssrf_refusal(code, 1L)
-  failure <- function(cause) ssrfr:::new_ssrf_failure(cause, 1L)
+  refusal <- function(code) new_ssrf_refusal(code, 1L)
+  failure <- function(cause) new_ssrf_failure(cause, 1L)
   scripts <- list(
     "a followed redirect, then 200" = list(
       calls = list(hop(), response(302L), hop(), response(200L)),
@@ -1644,7 +1649,7 @@ test_that("the documented redirect loops end on the chain's final outcome", {
 # public primitives.
 test_that("a redirect chain works through webfakes::httpbin_app()", {
   skip_if_no_webfakes()
-  web <- webfakes::local_app_process(
+  web <- local_app_server(
     webfakes::httpbin_app(),
     opts = webfakes::server_opts(num_threads = 2)
   )
@@ -1700,4 +1705,46 @@ test_that("a redirect chain works through webfakes::httpbin_app()", {
   )
   expect_identical(chain$result$status, 200L)
   expect_match(body_text(chain$result), "\"n\": *42")
+})
+
+# §6.6: a binding prints header field names and the body's size, never a
+# value or a byte; a redirect hop names its status, origin change and what
+# it dropped.
+test_that("a binding prints field names and sizes, never values", {
+  skip_if_no_webfakes()
+  web <- local_redirect_server()
+  port <- web$get_port()
+  mock_answers("127.0.0.1")
+  policy <- loopback_policy(port)
+  to <- pinned_url(port, "/echo", host = other_host)
+  b <- ssrf_prepare_hop(
+    pinned_url(port, paste0("/r/307?to=", URLencode(to, TRUE))),
+    policy,
+    request = list(
+      method = "POST",
+      headers = c(`X-Token` = "token-value-s3", `X-Trace` = "trace-value-t1"),
+      body = charToRaw("payload-bytes"),
+      carry = "X-Trace"
+    )
+  )
+  first <- format(b)
+  expect_identical(capture.output(print(b)), first)
+  expect_match(
+    first,
+    "^  headers: X-Token, X-Trace \\(values withheld\\)$",
+    all = FALSE
+  )
+  expect_match(first, "^  body: 13 bytes \\(withheld\\)$", all = FALSE)
+  expect_match(first, "^  carry: x-trace$", all = FALSE, ignore.case = TRUE)
+  expect_false(any(grepl("token-value|trace-value|payload-bytes", first)))
+  expect_identical(ssrf_fetch(b)$status, 307L)
+  b2 <- ssrf_prepare_hop(b$state$location, policy, from = b)
+  second <- format(b2)
+  expect_match(
+    second,
+    "^  redirect: 307 from hop 1, cross-origin; dropped x-token; body dropped$",
+    all = FALSE
+  )
+  expect_match(second, "^  body: none$", all = FALSE)
+  expect_false(any(grepl("token-value|trace-value|payload-bytes", second)))
 })

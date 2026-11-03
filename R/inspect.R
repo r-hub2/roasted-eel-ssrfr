@@ -53,11 +53,17 @@ inspect_hop <- function(url, policy, base = NULL, resolve = FALSE) {
 #' The URL is parsed as the guarded fetch parses it: `rurl` under the WHATWG
 #' URL Standard, then libcurl's own parser on the string libcurl would be
 #' handed. A URL the two parsers read differently is reported as `"parse"`.
+#' So is a host with an `xn--` label that is not a genuine A-label, such as
+#' `xn--a.example`, which `rurl` reports with its `domain-invalid-ace-label`
+#' diagnostic. So is a host with an empty label, such as `evil.example..`,
+#' which `rurl` reports with its `domain-empty-label` diagnostic, on the URL
+#' or on its serialization; a single trailing root dot is no empty label.
 #' Checks run in the order of a guarded hop, and the first one that applies
 #' names the reason code: the length limit and the parse, the scheme, embedded
 #' credentials, the port, an ambiguous numeric host spelling, the hostname
-#' rules, and the address rules. A relative reference, such as a redirect's
-#' `Location`, is resolved against `base` first.
+#' rules, and the address rules.
+#' A relative reference, such as a redirect's `Location`, is resolved against
+#' `base` first.
 #'
 #' Layer `"L0"`, the default, is structural and does no network I/O: it
 #' resolves no name, so for a name it reports no address. Layer `"L1"` also
@@ -168,20 +174,19 @@ ssrf_inspect_url <- function(
     resolve = identical(layer, "L1")
   )
   finding <- hop$finding
-  str_or_na <- function(x) if (is.null(x)) NA_character_ else x
   structure(
     list(
-      code = str_or_na(finding$code),
-      cause = str_or_na(finding$cause),
+      code = default_if_null(finding$code, NA_character_),
+      cause = default_if_null(finding$cause, NA_character_),
       step = if (is.null(finding)) NA_integer_ else finding$detail$step,
       detail = if (is.null(finding)) list() else finding$detail[-1L],
       layer = layer,
       url = redact_url(url),
-      scheme = str_or_na(hop$scheme),
-      host = str_or_na(hop$host),
-      port = if (is.null(hop$port)) NA_integer_ else hop$port,
+      scheme = default_if_null(hop$scheme, NA_character_),
+      host = default_if_null(hop$host, NA_character_),
+      port = default_if_null(hop$port, NA_integer_),
       userinfo = isTRUE(hop$userinfo),
-      host_kind = if (is.null(hop$host_kind)) NA_character_ else hop$host_kind,
+      host_kind = default_if_null(hop$host_kind, NA_character_),
       address = hop$address_facts,
       answers = hop$resolution$answers,
       addresses = address_records(hop$resolution$addresses)
@@ -207,41 +212,11 @@ address_records <- function(records) {
 
 #' @export
 format.ssrfr_inspection <- function(x, ...) {
-  line <- function(label, value) {
-    if (length(value) != 1L || is.na(value)) {
-      NULL
-    } else {
-      paste0("  ", label, ": ", value)
-    }
-  }
-  detail <- NULL
-  for (key in intersect(names(x$detail), display_detail_keys)) {
-    detail <- c(
-      detail,
-      paste0(
-        "    ",
-        key,
-        ": ",
-        toString(format(x$detail[[key]], trim = TRUE, justify = "none"))
-      )
-    )
-  }
-  outcome <- if (is.na(x$cause)) {
-    paste0("  code: ", if (is.na(x$code)) paste("none at", x$layer) else x$code)
-  } else {
-    paste0("  cause: ", x$cause)
-  }
-  answers <- if (!is.null(x$answers)) {
-    shown <- if (length(x$answers)) toString(x$answers) else "none"
-    paste0("  answers: ", shown)
-  }
-  addresses <- NULL
-  for (r in x$addresses) {
-    addresses <- c(
-      addresses,
-      paste0("    ", r$address, ": ", if (is.na(r$code)) "none" else r$code)
-    )
-  }
+  line <- format_ssrfr_inspection_line
+  detail <- format_ssrfr_inspection_detail(x$detail)
+  outcome <- format_ssrfr_inspection_outcome(x)
+  answers <- format_ssrfr_inspection_answers(x$answers)
+  addresses <- format_ssrfr_inspection_addresses(x$addresses)
   c(
     paste0("<ssrfr_inspection> (", x$layer, ": facts, not a defense)"),
     outcome,
@@ -258,8 +233,60 @@ format.ssrfr_inspection <- function(x, ...) {
   )
 }
 
-#' @export
-print.ssrfr_inspection <- function(x, ...) {
-  cat(format(x, ...), sep = "\n")
-  invisible(x)
+# One `label: value` line of an inspection, or NULL when the value is absent:
+# not a single value, or NA.
+format_ssrfr_inspection_line <- function(label, value) {
+  if (length(value) != 1L || is.na(value)) {
+    NULL
+  } else {
+    paste0("  ", label, ": ", value)
+  }
+}
+
+# The detail lines an inspection shows: only the keys in
+# `display_detail_keys`, in the order the detail holds them, or NULL.
+format_ssrfr_inspection_detail <- function(detail) {
+  lines <- NULL
+  for (key in intersect(names(detail), display_detail_keys)) {
+    lines <- c(
+      lines,
+      paste0(
+        "    ",
+        key,
+        ": ",
+        toString(format(detail[[key]], trim = TRUE, justify = "none"))
+      )
+    )
+  }
+  lines
+}
+
+# The outcome line: the cause of a failure, else the reason code, or `none
+# at` the layer the inspection reached.
+format_ssrfr_inspection_outcome <- function(x) {
+  if (is.na(x$cause)) {
+    paste0("  code: ", if (is.na(x$code)) paste("none at", x$layer) else x$code)
+  } else {
+    paste0("  cause: ", x$cause)
+  }
+}
+
+# The answers line: NULL when no resolution ran, `none` for an empty answer.
+format_ssrfr_inspection_answers <- function(answers) {
+  if (!is.null(answers)) {
+    shown <- if (length(answers)) toString(answers) else "none"
+    paste0("  answers: ", shown)
+  }
+}
+
+# One line per resolved address with its reason code or `none`, or NULL.
+format_ssrfr_inspection_addresses <- function(addresses) {
+  lines <- NULL
+  for (r in addresses) {
+    lines <- c(
+      lines,
+      paste0("    ", r$address, ": ", if (is.na(r$code)) "none" else r$code)
+    )
+  }
+  lines
 }

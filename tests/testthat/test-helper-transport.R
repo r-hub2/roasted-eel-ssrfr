@@ -59,3 +59,25 @@ test_that("free_port() skips a port another process holds on ::1", {
   spare <- free_port(setdiff(sample(30000:60000, 50), held))
   expect_identical(free_port(c(held, spare)), spare)
 })
+
+# SSRF-ptkasofy: a raw server that is never ready fails the test naming the
+# wait, and one that exits first fails at once, not after the whole wait.
+test_that("wait_for_ready() fails naming the wait", {
+  skip_if_not_installed("callr")
+  ready <- tempfile("listening-")
+  slow <- callr::r_bg(function() Sys.sleep(30))
+  withr::defer(slow$kill())
+  withr::local_envvar(SSRFR_TEST_START_TIMEOUT = "200")
+  expect_error(
+    wait_for_ready(ready, slow),
+    "the raw server's readiness wait ran out after 0.2 s",
+    fixed = TRUE
+  )
+
+  gone <- callr::r_bg(function() NULL)
+  gone$wait(10000)
+  withr::local_envvar(SSRFR_TEST_START_TIMEOUT = "60000")
+  t0 <- Sys.time()
+  expect_error(wait_for_ready(ready, gone), "exited before it was ready")
+  expect_lt(as.numeric(difftime(Sys.time(), t0, units = "secs")), 5)
+})

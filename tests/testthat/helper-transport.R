@@ -108,6 +108,66 @@ skip_if_no_webfakes <- function() {
   skip_if_not_installed("callr")
 }
 
+# How long a test's background process may take to start, in milliseconds:
+# 60 s unless SSRFR_TEST_START_TIMEOUT says otherwise. A webfakes app start
+# waits twice, and on a loaded machine either wait can outlast its default
+# (SSRF-xounanjz): for the R session to start (callr's `wait_timeout`, 3 s,
+# which webfakes does not pass on) and for the app to listen (webfakes'
+# `process_timeout`, 5 s). A raw server's readiness wait, wait_for_ready(),
+# uses it too (SSRF-ptkasofy).
+app_start_timeout <- function() {
+  as.integer(Sys.getenv("SSRFR_TEST_START_TIMEOUT", "60000"))
+}
+
+# Waits until the background `process` has created the file `ready`, for as
+# long as app_start_timeout() allows. A wait that runs out, or a process that
+# exits first, is an error naming the wait, not a return that leaves the test
+# to fail later on a refused connection (SSRF-ptkasofy).
+wait_for_ready <- function(ready, process, what = "the raw server") {
+  secs <- app_start_timeout() / 1000
+  t0 <- Sys.time()
+  while (!file.exists(ready)) {
+    if (!process$is_alive() && !file.exists(ready)) {
+      stop(what, " exited before it was ready", call. = FALSE)
+    }
+    if (difftime(Sys.time(), t0, units = "secs") >= secs) {
+      stop(
+        what,
+        "'s readiness wait ran out after ",
+        secs,
+        " s (SSRFR_TEST_START_TIMEOUT)",
+        call. = FALSE
+      )
+    }
+    Sys.sleep(0.05)
+  }
+  invisible()
+}
+
+# webfakes::local_app_process(), with app_start_timeout() for both waits.
+# webfakes starts the session with callr::r_session$new(), so for as long as
+# `env` lasts that call gets the longer `wait_timeout`.
+local_app_server <- function(app, opts, port = NULL, env = parent.frame()) {
+  timeout <- app_start_timeout()
+  session <- callr::r_session
+  local_mocked_bindings(
+    r_session = list(
+      new = function(options, wait = TRUE, wait_timeout = timeout) {
+        session$new(options, wait = wait, wait_timeout = timeout)
+      }
+    ),
+    .package = "callr",
+    .env = env
+  )
+  webfakes::local_app_process(
+    app,
+    port = port,
+    opts = opts,
+    process_timeout = timeout,
+    .local_envir = env
+  )
+}
+
 # The app most L2 tests use.
 test_app <- function() {
   app <- webfakes::new_app()
@@ -164,6 +224,12 @@ test_app <- function() {
     res$add_header("Location", "/b")
     res$send("")
   })
+  app$get("/repeated-location", function(req, res) {
+    res$set_status(302L)
+    res$add_header("Location", "/a")
+    res$add_header("Location", "/a")
+    res$send("")
+  })
   app$get("/redirect", function(req, res) {
     res$redirect("/next?x=1", 302L)
   })
@@ -211,11 +277,11 @@ local_test_server <- function(
     error_log_file = FALSE,
     ssl_certificate = if (tls) test_path("certs", "alpha.pem")
   )
-  webfakes::local_app_process(
+  local_app_server(
     app,
     port = if (tls) "0s" else NULL,
     opts = opts,
-    .local_envir = env
+    env = env
   )
 }
 
@@ -274,7 +340,7 @@ skip_if_test_ca_ignored <- function() {
 
 local_trust_test_ca <- function(env = parent.frame()) {
   skip_if_test_ca_ignored()
-  builder <- ssrfr:::transport_options
+  builder <- transport_options
   ca <- test_path("certs", "ca.crt")
   local_mocked_bindings(
     transport_options = function(...) c(builder(...), list(cainfo = ca)),
@@ -286,7 +352,7 @@ local_trust_test_ca <- function(env = parent.frame()) {
 # Records libcurl's text trace of every attempt, alongside ssrfr's own
 # debug callback, which still runs.
 local_trace_recorder <- function(env = parent.frame()) {
-  transfer <- ssrfr:::dep_curl_transfer
+  transfer <- dep_curl_transfer
   seen <- new.env(parent = emptyenv())
   seen$lines <- character()
   local_mocked_bindings(
@@ -384,8 +450,9 @@ raw_server_io <- list(
 
 # Runs `serve(socket, io, ...)` in a background process, where `socket`
 # listens on a free port, `io` is raw_server_io and `...` is `args`, and
-# returns once the socket listens. The process is killed when the calling
-# test ends. Returns the port and the callr process.
+# returns once the socket listens, or fails as wait_for_ready() does. The
+# process is killed when the calling test ends. Returns the port and the
+# callr process.
 local_server_process <- function(serve, args = list(), env = parent.frame()) {
   skip_if_not_installed("callr")
   shipped <- function(f) {
@@ -410,10 +477,7 @@ local_server_process <- function(serve, args = list(), env = parent.frame()) {
     )
   )
   withr::defer(server$kill(), envir = env)
-  t0 <- Sys.time()
-  while (!file.exists(ready) && difftime(Sys.time(), t0, units = "secs") < 20) {
-    Sys.sleep(0.05)
-  }
+  wait_for_ready(ready, server)
   list(port = port, process = server)
 }
 
@@ -660,7 +724,7 @@ option_problems <- function(opts, host, address) {
     address
   }
   want("connect_to", paste0(host, "::", target, ":"))
-  for (name in names(ssrfr:::fixed_transport_options)) {
+  for (name in names(fixed_transport_options)) {
     if (!name %in% names(opts)) {
       found$problems <- c(found$problems, paste("missing", name))
     }
@@ -704,7 +768,7 @@ option_problems <- function(opts, host, address) {
       problems <- c(problems, paste("missing", name))
     }
   }
-  set_never <- intersect(names(opts), ssrfr:::never_set_options)
+  set_never <- intersect(names(opts), never_set_options)
   if (length(set_never)) {
     problems <- c(problems, paste("sets", set_never))
   }

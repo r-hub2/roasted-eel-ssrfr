@@ -17,7 +17,9 @@
 #' exactly, unless it begins with `.`, in which case it matches every proper
 #' subdomain and not the bare name: `".corp"` matches `api.corp`, not `corp`.
 #' No other wildcard exists. An address literal is not a hostname rule; write
-#' it as a range. The policy stores the normalized rules.
+#' it as a range. A rule with an empty label (`"a..b"`), or an `xn--` label
+#' that is not a genuine A-label, is an error. The policy stores the normalized
+#' rules.
 #'
 #' Ranges are CIDR blocks read by `raddr`, such as `"10.0.0.0/8"` or
 #' `"2001:db8::/32"`. A single address is a `/32` or `/128`, and a block with
@@ -107,15 +109,13 @@ ssrf_policy <- function(
 # that, the first URL entry.
 default_user_agent <- function() {
   desc <- utils::packageDescription("ssrfr")
-  urls <- strsplit(desc$URL %||% "", "[,[:space:]]+")[[1L]]
+  urls <- strsplit(default_if_null(desc$URL, ""), "[,[:space:]]+")[[1L]]
   urls <- urls[nzchar(urls)]
-  bugs <- desc$BugReports %||% ""
+  bugs <- default_if_null(desc$BugReports, "")
   repo <- urls[startsWith(bugs, paste0(urls, "/"))]
   repo <- if (length(repo)) repo[[1L]] else urls[1L]
   paste0("ssrfr/", desc$Version, " (+", repo, ")")
 }
-
-`%||%` <- function(x, y) if (is.null(x)) y else x
 
 policy_error <- function(message) {
   abort_ssrfr("invalid_policy", message, fn = "ssrf_policy")
@@ -179,14 +179,7 @@ check_ports <- function(x) {
     policy_error("`allow_ports` must be a non-empty numeric vector.")
   }
   for (i in seq_along(x)) {
-    port <- x[[i]]
-    if (
-      is.na(port) ||
-        !is.finite(port) ||
-        port != trunc(port) ||
-        port < 1 ||
-        port > 65535
-    ) {
+    if (check_ports_invalid(x[[i]])) {
       policy_error(paste0(
         entry_label("allow_ports", i),
         " is not a port number from 1 to 65535."
@@ -194,6 +187,16 @@ check_ports <- function(x) {
     }
   }
   as.integer(unname(x))
+}
+
+# Whether one allow_ports entry is not a port number: NA, non-finite, not a
+# whole number, or outside 1 to 65535.
+check_ports_invalid <- function(port) {
+  is.na(port) ||
+    !is.finite(port) ||
+    port != trunc(port) ||
+    port < 1 ||
+    port > 65535
 }
 
 check_flag <- function(x, field) {
@@ -252,9 +255,11 @@ check_user_agent <- function(x) {
 
 # Hostname rules (§5.0): a name, or `.` and a name for its proper subdomains.
 # The name must be exactly one host that rurl's WHATWG parse admits as a
-# domain, never an address literal, and it is stored normalized: IDNA A-label,
-# ASCII-lowercased, one trailing root dot removed. rurl does the parsing and
-# the IDNA mapping; ssrfr only reads the result.
+# domain, never an address literal, with no empty label and no `xn--` label
+# that is not a genuine A-label, and it is stored normalized: IDNA A-label,
+# ASCII-lowercased, one trailing root dot removed. Such a rule could match no
+# host, a fail-open for a deny list (§5). rurl does the parsing, the IDNA
+# mapping and the label diagnostics; ssrfr only reads the result.
 check_host_rules <- function(x, field) {
   x <- check_entries(x, field)
   vapply(
@@ -287,29 +292,48 @@ normalize_host_rule <- function(rule, label) {
   if (!nzchar(normalized) || grepl("[^\\x21-\\x7e]", normalized, perl = TRUE)) {
     invalid("it has no IDNA A-label form.")
   }
+  # Both the name as written and its normalized A-label: IDNA mapping drops
+  # ignored code points, so `a.<U+00AD>.b` becomes `a..b` and a first label of
+  # them turns `<U+00AD>.internal` into the subdomain rule `.internal`.
+  for (url in c(host$url, paste0("http://", normalized, ":1/"))) {
+    why <- rule_label_problem(url)
+    if (!is.null(why)) {
+      invalid(why)
+    }
+  }
   if (subdomains) paste0(".", normalized) else normalized
 }
 
-# Parses `http://<name>:1/` with rurl under WHATWG and returns the host, or
-# NULL unless the whole of `name` is the host: the probe port and the empty
-# path must survive, and no userinfo, query or fragment may appear. Any rurl
-# error is a NULL too.
+# Why rurl's diagnostics of a rule's probe `url` make it no valid rule: an
+# empty label, or an `xn--` label that is not a genuine A-label (§5.0); NULL
+# when they report neither. Diagnostics that cannot be read fail closed.
+rule_label_problem <- function(url) {
+  diagnostics <- read_diagnostics(url)
+  if (is.null(diagnostics)) {
+    return("its labels could not be checked.")
+  }
+  if (empty_label_diagnostic %in% diagnostics) {
+    return("it has an empty label.")
+  }
+  if (ace_label_failure %in% diagnostics) {
+    return("it has an `xn--` label that is not a genuine A-label.")
+  }
+  NULL
+}
+
+# Parses `http://<name>:1/` with rurl under WHATWG and returns that probe URL
+# with the host, or NULL unless the whole of `name` is the host: the probe port
+# and the empty path must survive, and no userinfo, query or fragment may
+# appear. Any rurl error is a NULL too.
 rule_host <- function(name) {
   url <- paste0("http://", name, ":1/")
   tryCatch(
     {
       p <- rurl::safe_parse_urls(url, url_standard = "whatwg")
       verdict <- rurl::get_parse_verdicts(url, url_standard = "whatwg")
-      whole <- identical(verdict$layer1_syntax_verdict[[1L]], "pass") &&
-        !is.na(p$host[[1L]]) &&
-        identical(as.character(p$port[[1L]]), "1") &&
-        identical(p$path[[1L]], "/") &&
-        is.na(p$user[[1L]]) &&
-        is.na(p$password[[1L]]) &&
-        is.na(p$query[[1L]]) &&
-        is.na(p$fragment[[1L]])
-      if (whole) {
+      if (rule_host_whole(p, verdict)) {
         list(
+          url = url,
           a_label = rurl::get_host(
             url,
             host_encoding = "idna",
@@ -321,6 +345,25 @@ rule_host <- function(name) {
     },
     error = function(e) NULL
   )
+}
+
+# Whether rule_host()'s probe parsed with the whole name as its host: the
+# syntax verdict passed, a host was read, the probe port and the empty path
+# survived, and no userinfo, query or fragment appeared.
+rule_host_whole <- function(p, verdict) {
+  identical(verdict$layer1_syntax_verdict[[1L]], "pass") &&
+    !is.na(p$host[[1L]]) &&
+    identical(as.character(p$port[[1L]]), "1") &&
+    identical(p$path[[1L]], "/") &&
+    rule_host_bare(p)
+}
+
+# Whether the probe's parse holds no userinfo, query or fragment.
+rule_host_bare <- function(p) {
+  is.na(p$user[[1L]]) &&
+    is.na(p$password[[1L]]) &&
+    is.na(p$query[[1L]]) &&
+    is.na(p$fragment[[1L]])
 }
 
 # Locale-independent ASCII case folding (§5.0).
@@ -372,10 +415,4 @@ format.ssrfr_policy <- function(x, ...) {
     "<ssrfr_policy>",
     paste0("  ", format(fields), "  ", vapply(x, show, character(1)))
   )
-}
-
-#' @export
-print.ssrfr_policy <- function(x, ...) {
-  cat(format(x, ...), sep = "\n")
-  invisible(x)
 }

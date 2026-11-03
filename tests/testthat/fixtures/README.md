@@ -87,6 +87,6 @@ Measured, never hand-edited:
 | `requirement` | the requirement, paraphrased |
 | `class` | `enforced-by-library`, `enforced-by-application` or `out-of-scope` (§7 component 3) |
 | `spec` | the section that decides it |
-| `evidence` | what demonstrates it: `verdict:<group>`, `parse-vectors`, an `r-binding.md` §7 behaviour row, or a test as `test-<file>.R: <test_that name>`, several joined by ` ; `; `-` if nothing in `ssrfr` does |
+| `evidence` | what demonstrates it: `verdict:<group>`, `parse-vectors`, an `r-binding.md` §7 behavior row, or a test as `test-<file>.R: <test_that name>`, several joined by ` ; `; `-` if nothing in `ssrfr` does |
 | `source` | the requirement's published text |
 | `note` | why the class differs from the first mapping (`reclassified:`), a content correction (`corrected:`), or a gap |

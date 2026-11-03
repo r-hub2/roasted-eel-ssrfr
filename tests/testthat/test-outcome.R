@@ -187,6 +187,22 @@ test_that("print, format and conditions omit planted secrets", {
   }
 })
 
+test_that("a printed refusal keeps the URL's host and path, not its userinfo", {
+  r <- new_ssrf_refusal(
+    "loopback",
+    hop = 1,
+    url = "https://alice:s3cretPW@internal.example/path"
+  )
+  out <- capture.output(print(r))
+  expect_match(
+    out,
+    "^  url: https://<redacted>@internal\\.example/path$",
+    all = FALSE
+  )
+  expect_no_planted(out, "print(refusal)")
+  expect_no_match(paste(out, collapse = "\n"), "alice", fixed = TRUE)
+})
+
 test_that("a URL rurl cannot parse is withheld whole", {
   f <- new_ssrf_failure(
     "protocol-error",

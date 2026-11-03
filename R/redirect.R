@@ -44,34 +44,11 @@ check_from <- function(from, policy) {
       fn = "ssrf_prepare_hop"
     )
   }
-  invalid <- function(message) {
-    abort_ssrfr("invalid_from", message, fn = "ssrf_prepare_hop")
-  }
-  state <- from$state
-  if (!is.environment(state) || !identical(state$fetchable, FALSE)) {
-    invalid(paste0(
-      "`from` has not been fetched; fetch it with ssrf_fetch() before ",
-      "following its redirect."
-    ))
-  }
-  if (!isTRUE(state$fetched) || !identical(state$outcome, "response")) {
-    invalid("`from` records no successful response to follow.")
-  }
-  followed <- is.integer(state$status) &&
-    length(state$status) == 1L &&
-    state$status %in% followed_statuses &&
-    identical(state$location_count, 1L) &&
-    is_string(state$location)
-  if (!followed) {
-    invalid(paste0(
-      "`from` records a response that is not a followed redirect: a 301, ",
-      "302, 303, 307 or 308 with exactly one Location field."
-    ))
-  }
+  check_from_state(from$state)
   # A binding past its budget was refused as redirect-limit by ssrf_fetch()
   # and never records a response; this holds the line if one ever did.
   if (budget_spent(from)) {
-    invalid("`from` spent the chain's redirect budget.")
+    check_from_invalid("`from` spent the chain's redirect budget.")
   }
   budget <- from$budget
   if (
@@ -91,6 +68,41 @@ check_from <- function(from, policy) {
   invisible()
 }
 
+# Signals check_from()'s `invalid_from`.
+check_from_invalid <- function(message) {
+  abort_ssrfr("invalid_from", message, fn = "ssrf_prepare_hop")
+}
+
+# Checks that `from`'s state is spent, with a successful response that is a
+# followed redirect; signals `invalid_from` at the first rule it breaks.
+check_from_state <- function(state) {
+  if (!is.environment(state) || !identical(state$fetchable, FALSE)) {
+    check_from_invalid(paste0(
+      "`from` has not been fetched; fetch it with ssrf_fetch() before ",
+      "following its redirect."
+    ))
+  }
+  if (!isTRUE(state$fetched) || !identical(state$outcome, "response")) {
+    check_from_invalid("`from` records no successful response to follow.")
+  }
+  if (!check_from_followed(state)) {
+    check_from_invalid(paste0(
+      "`from` records a response that is not a followed redirect: a 301, ",
+      "302, 303, 307 or 308 with exactly one Location field."
+    ))
+  }
+}
+
+# Whether the recorded response is a followed redirect: one of
+# `followed_statuses`, with exactly one Location field.
+check_from_followed <- function(state) {
+  is.integer(state$status) &&
+    length(state$status) == 1L &&
+    state$status %in% followed_statuses &&
+    identical(state$location_count, 1L) &&
+    is_string(state$location)
+}
+
 # Whether a 3xx on `binding`'s hop is past the chain's redirect budget: the
 # hops before it followed `hop - 1` redirects, and one more would exceed
 # `max_redirects` (§2.3, §5.3; under max_redirects = 0, the first hop).
@@ -105,7 +117,7 @@ redirect_limit_refusal <- function(binding) {
     "redirect-limit",
     binding$hop,
     host = binding$origin$host,
-    address = binding$state$pin_used %||% NA_character_,
+    address = default_if_null(binding$state$pin_used, NA_character_),
     url = binding$url,
     detail = list(step = 13L, check = "redirect", limit = "max_redirects")
   )

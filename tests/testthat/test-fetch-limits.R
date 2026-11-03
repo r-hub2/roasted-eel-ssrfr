@@ -24,7 +24,7 @@ test_that("total_timeout is re-checked after decoding", {
   web <- local_test_server()
   port <- web$get_port()
   mock_answers("127.0.0.1")
-  transfer <- ssrfr:::dep_curl_transfer
+  transfer <- dep_curl_transfer
   # A transfer that returns in time, followed by decoding that does not.
   local_mocked_bindings(
     dep_curl_transfer = function(opts, on_body, debug, progress) {
@@ -316,7 +316,7 @@ test_that("a header buffer is decided once per growth", {
   run <- function(max_fields) {
     calls <- new.env(parent = emptyenv())
     calls$n <- 0L
-    stop_at <- ssrfr:::header_stop
+    stop_at <- header_stop
     local_mocked_bindings(
       header_stop = function(seen, policy, binding, reported = NULL) {
         calls$n <- calls$n + 1L
@@ -426,7 +426,7 @@ test_that("trailer fields count against the header limits", {
 # a header or a trailer section that never ends still stops at its limit.
 test_that("the header limits hold without the trace's header or data lines", {
   mock_answers("127.0.0.1")
-  transfer <- ssrfr:::dep_curl_transfer
+  transfer <- dep_curl_transfer
   local_mocked_bindings(
     dep_curl_transfer = function(opts, on_body, debug, progress) {
       text_only <- function(type, msg) {
@@ -482,19 +482,35 @@ test_that("a redirect is returned with Location; two are a protocol error", {
   expect_identical(b$state$location_count, 1L)
   expect_true(b$state$fetched)
 
-  r <- guarded_get(pinned_url(port, "/two-locations"), loopback_policy(port))
-  expect_s3_class(r, "ssrfr_failure")
-  expect_identical(r$cause, "protocol-error")
-  expect_identical(r$detail$check, "location")
-  b <- attr(r, "binding")
-  expect_identical(b$state$location_count, 2L)
-  expect_null(b$state$location)
-  expect_false(b$state$fetched)
+  # libcurl 8.17.0 and later fail a transfer whose second Location differs
+  # from the first themselves (CURLE_WEIRD_SERVER_REPLY, "Multiple Location
+  # headers"; curl commit 9596c4a), before the header is whole. ssrfr then
+  # records no response, and the transport error ends the fetch: the cause
+  # is the same `protocol-error`, but no Location is counted. An exact
+  # repeat is ignored by libcurl (curl commit 4be9db7) and reaches ssrfr's
+  # own check on every libcurl.
+  libcurl <- sub("[^0-9.].*$", "", curl::curl_version()$version)
+  libcurl_refuses <- numeric_version(libcurl) >= "8.17.0"
+  for (path in c("/two-locations", "/repeated-location")) {
+    r <- guarded_get(pinned_url(port, path), loopback_policy(port))
+    expect_s3_class(r, "ssrfr_failure")
+    expect_identical(r$cause, "protocol-error", label = path)
+    b <- attr(r, "binding")
+    if (path == "/two-locations" && libcurl_refuses) {
+      expect_identical(r$detail$check, "transport", label = path)
+      expect_null(b$state$location_count, label = path)
+    } else {
+      expect_identical(r$detail$check, "location", label = path)
+      expect_identical(b$state$location_count, 2L, label = path)
+    }
+    expect_null(b$state$location, label = path)
+    expect_false(b$state$fetched, label = path)
+  }
 })
 
 # r-binding.md §7, Rules: each proxy variable, with an http:// and a
 # socks5h:// value, set to a dead loopback port, for a pinned http:// and a
-# pinned https:// fetch. A variable libcurl honoured would send the fetch to
+# pinned https:// fetch. A variable libcurl honored would send the fetch to
 # the dead port.
 test_that("proxy variables have no effect", {
   skip_if_no_webfakes()
@@ -656,11 +672,11 @@ test_that("the transport refuses every scheme but http and https", {
     loopback_policy(1),
     request = list()
   )
-  opts <- ssrfr:::transport_options(
+  opts <- transport_options(
     b,
     "127.0.0.1",
     5,
-    ssrfr:::read_curl_capabilities()
+    read_curl_capabilities()
   )
   file <- tempfile(fileext = ".txt")
   writeLines("secret", file)
@@ -676,7 +692,7 @@ test_that("the transport refuses every scheme but http and https", {
   schemes <- setdiff(curl::curl_version()$protocols, c("http", "https"))
   expect_gt(length(schemes), 0L)
   for (scheme in schemes) {
-    got <- ssrfr:::dep_curl_transfer(
+    got <- dep_curl_transfer(
       replace(opts, "url", target(scheme)),
       function(x, received) TRUE,
       function(type, msg) NULL,
@@ -696,7 +712,7 @@ test_that("the transport refuses every scheme but http and https", {
 # one runs the user's options(error = ) hook, which may quit the process.
 # ssrfr raises none: a limit reached in the write callback, at the first
 # delivery or mid-body, or in the progress callback, is recorded and the
-# transfer cancelled, and the fetch returns a failure.
+# transfer canceled, and the fetch returns a failure.
 test_that("a stop at a limit never runs the error hook", {
   skip_if_not_installed("withr")
   mock_answers("127.0.0.1")
@@ -705,7 +721,7 @@ test_that("a stop at a limit never runs the error hook", {
   withr::local_options(error = function() hook$runs <- hook$runs + 1L)
   # ssrfr's own total_timeout check runs on each delivery; libcurl's timer
   # is lifted so that check is the one that ends the transfer.
-  builder <- ssrfr:::transport_options
+  builder <- transport_options
   local_mocked_bindings(
     transport_options = function(...) {
       replace(builder(...), "timeout_ms", 60000L)
@@ -803,7 +819,8 @@ test_that("a stop in the write callback aborts, without the error hook", {
       seen$stopped <- FALSE
       seen$after <- 0
       seen$cleanup <- FALSE
-      transfer <- ssrfr:::dep_curl_transfer
+      # A subprocess has no test environment: reach the internal by namespace.
+      transfer <- asNamespace("ssrfr")$dep_curl_transfer
       policy <- ssrfr::ssrf_policy(
         allow_ranges = "127.0.0.0/8",
         allow_ports = port,
@@ -869,7 +886,7 @@ test_that("a trailer line shaped like a status line is a field", {
     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nX: 1\r\n\r\n",
     "HTTP/1.1 200 x\r\nA: b\r\n"
   )
-  ssrfr:::measure_header(seen, buffer)
+  measure_header(seen, buffer)
   expect_identical(seen$header_bytes, length(buffer))
   expect_identical(seen$header_fields, 2L + 2L)
 })
@@ -897,7 +914,7 @@ test_that("the header measure classifies a line by the block before it", {
   )
   for (name in names(cases)) {
     seen <- new.env(parent = emptyenv())
-    ssrfr:::measure_header(seen, cases[[name]]$buffer)
+    measure_header(seen, cases[[name]]$buffer)
     expect_identical(seen$header_fields, cases[[name]]$fields, label = name)
     expect_identical(
       seen$header_bytes,
@@ -916,7 +933,7 @@ test_that("an empty line after the final block is no field", {
     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nX: 1\r\n\r\n",
     "X-T: 1\r\n\r\n"
   )
-  ssrfr:::measure_header(seen, buffer)
+  measure_header(seen, buffer)
   expect_identical(seen$header_bytes, length(buffer))
   expect_identical(seen$header_fields, 2L + 1L)
 })
@@ -928,7 +945,7 @@ test_that("an empty line after the final block is no field", {
 test_that("a header measured as it grows reads as the whole measured once", {
   once <- function(buffer) {
     seen <- new.env(parent = emptyenv())
-    ssrfr:::measure_header(seen, buffer)
+    measure_header(seen, buffer)
     seen
   }
   reading <- function(seen, buffer) {
@@ -936,7 +953,7 @@ test_that("a header measured as it grows reads as the whole measured once", {
       bytes = seen$header_bytes,
       fields = seen$header_fields,
       segments = seen$segments[c("lines", "ends", "blocks", "trailers")],
-      parsed = ssrfr:::parse_response_headers(buffer, seen$segments)
+      parsed = parse_response_headers(buffer, seen$segments)
     )
   }
   buffers <- list(
@@ -972,7 +989,7 @@ test_that("a header measured as it grows reads as the whole measured once", {
       want <- list()
       for (n in unique(c(seq(0L, length(buffer), by = step), length(buffer)))) {
         prefix <- buffer[seq_len(n)]
-        ssrfr:::measure_header(seen, prefix)
+        measure_header(seen, prefix)
         got[[length(got) + 1L]] <- reading(seen, prefix)
         want[[length(want) + 1L]] <- reading(once(prefix), prefix)
       }
@@ -988,7 +1005,7 @@ test_that("a header measured as it grows reads as the whole measured once", {
     buffers$trailers[1:30],
     buffers$strays
   )) {
-    ssrfr:::measure_header(seen, buffer)
+    measure_header(seen, buffer)
     expect_identical(reading(seen, buffer), reading(once(buffer), buffer))
   }
 })

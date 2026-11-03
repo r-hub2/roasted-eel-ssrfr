@@ -8,268 +8,295 @@
 # Every row cites current vendor documentation, the date it was retrieved, and
 # the vendor's own text naming the address or name, verbatim (§5). `linklint`'s
 # table (packages/core/src/data/cloud-metadata.ts at 8830901) is the starting
-# point; the Scaleway and Linode rows are the four §5 adds. Where the page
+# point; the Scaleway and Linode rows are the four §5 adds, and gate 5's bare
+# `metadata`, which linklint declined, is admitted by §5. Where the page
 # linklint cites does not name the address, the row cites the page that does.
+# Rows retrieved on different dates carry their own `retrieved` date.
 #
 # Keys are canonical: an address in raddr's canonical text form, a hostname
 # ASCII-lowercase with no trailing root dot. Matching is by value, through
 # raddr, never by string (INV-3); tests/testthat/test-policy-data.R checks the
 # spelling, the family and the hostname-to-endpoint tie.
 
-domain_provider_endpoints <- function() {
-  rows <- list(
-    c(
-      "169.254.169.254",
-      "AWS / Azure / GCP / DigitalOcean / OpenStack",
-      "instance-metadata",
-      paste0(
-        "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/",
-        "instancedata-data-retrieval.html"
-      ),
-      paste(
-        "To retrieve instance metadata using an IPv6 address, ensure that you",
-        "enable and use the IPv6 address of the IMDS [fd00:ec2::254] instead",
-        "of the IPv4 address 169.254.169.254."
-      )
+# Gate 2's rows: address, provider, kind, source and the vendor's quote.
+provider_endpoint_rows <- list(
+  c(
+    "169.254.169.254",
+    "AWS / Azure / GCP / DigitalOcean / OpenStack",
+    "instance-metadata",
+    paste0(
+      "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/",
+      "instancedata-data-retrieval.html"
     ),
-    c(
-      "fd00:ec2::254",
-      "AWS (IPv6 IMDS)",
-      "instance-metadata",
-      paste0(
-        "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/",
-        "configuring-instance-metadata-service.html"
-      ),
-      paste(
-        "If you are retrieving instance metadata for EC2 instances over the",
-        "IPv6 address, ensure that you enable and use the IPv6 address",
-        "instead: [fd00:ec2::254]."
-      )
+    paste(
+      "To retrieve instance metadata using an IPv6 address, ensure that you",
+      "enable and use the IPv6 address of the IMDS [fd00:ec2::254] instead",
+      "of the IPv4 address 169.254.169.254."
+    )
+  ),
+  c(
+    "fd00:ec2::254",
+    "AWS (IPv6 IMDS)",
+    "instance-metadata",
+    paste0(
+      "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/",
+      "configuring-instance-metadata-service.html"
     ),
-    c(
-      "192.0.0.192",
-      "Oracle Cloud",
-      "instance-metadata",
-      paste0(
-        "https://docs.oracle.com/en/cloud/iaas-classic/compute-iaas-cloud/",
-        "stcsg/retrieving-instance-metadata.html"
-      ),
-      paste(
-        "The predefined instance metadata fields are stored at",
-        "http://192.0.0.192/{version}/metadata."
-      )
+    paste(
+      "If you are retrieving instance metadata for EC2 instances over the",
+      "IPv6 address, ensure that you enable and use the IPv6 address",
+      "instead: [fd00:ec2::254]."
+    )
+  ),
+  c(
+    "192.0.0.192",
+    "Oracle Cloud",
+    "instance-metadata",
+    paste0(
+      "https://docs.oracle.com/en/cloud/iaas-classic/compute-iaas-cloud/",
+      "stcsg/retrieving-instance-metadata.html"
     ),
-    c(
-      "100.100.100.200",
-      "Alibaba Cloud",
-      "instance-metadata",
-      paste0(
-        "https://www.alibabacloud.com/help/en/ecs/user-guide/",
-        "view-instance-metadata/"
-      ),
-      paste(
-        "100.100.100.200 is a link-local address reachable only from within an",
-        "ECS instance over its virtual network interface."
-      )
+    paste(
+      "The predefined instance metadata fields are stored at",
+      "http://192.0.0.192/{version}/metadata."
+    )
+  ),
+  c(
+    "100.100.100.200",
+    "Alibaba Cloud",
+    "instance-metadata",
+    paste0(
+      "https://www.alibabacloud.com/help/en/ecs/user-guide/",
+      "view-instance-metadata/"
     ),
-    c(
-      "168.63.129.16",
-      "Azure (WireServer host channel)",
-      "provider-internal",
-      paste0(
-        "https://learn.microsoft.com/en-us/azure/virtual-network/",
-        "what-is-ip-address-168-63-129-16"
-      ),
-      paste(
-        "The virtual machine Agent requires outbound communication over ports",
-        "80/tcp and 32526/tcp with WireServer (168.63.129.16)."
-      )
+    paste(
+      "100.100.100.200 is a link-local address reachable only from within an",
+      "ECS instance over its virtual network interface."
+    )
+  ),
+  c(
+    "168.63.129.16",
+    "Azure (WireServer host channel)",
+    "provider-internal",
+    paste0(
+      "https://learn.microsoft.com/en-us/azure/virtual-network/",
+      "what-is-ip-address-168-63-129-16"
     ),
-    c(
-      "169.254.170.2",
-      "AWS (ECS task credentials)",
-      "instance-metadata",
-      paste0(
-        "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/",
-        "task-iam-roles.html"
-      ),
-      paste(
-        "New-NetRoute -DestinationPrefix 169.254.170.2/32 -InterfaceIndex",
-        "$ifIndex -NextHop $gateway -PolicyStore ActiveStore # credentials API"
-      )
+    paste(
+      "The virtual machine Agent requires outbound communication over ports",
+      "80/tcp and 32526/tcp with WireServer (168.63.129.16)."
+    )
+  ),
+  c(
+    "169.254.170.2",
+    "AWS (ECS task credentials)",
+    "instance-metadata",
+    paste0(
+      "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/",
+      "task-iam-roles.html"
     ),
-    c(
-      "169.254.170.23",
-      "AWS (EKS Pod Identity)",
-      "instance-metadata",
-      paste0(
-        "https://docs.aws.amazon.com/eks/latest/userguide/",
-        "pod-id-agent-setup.html"
-      ),
-      paste(
-        "The agent uses the loopback (localhost) IP address 169.254.170.23 for",
-        "IPv4 and the localhost IP address [fd00:ec2::23] for IPv6."
-      )
+    paste(
+      "New-NetRoute -DestinationPrefix 169.254.170.2/32 -InterfaceIndex",
+      "$ifIndex -NextHop $gateway -PolicyStore ActiveStore # credentials API"
+    )
+  ),
+  c(
+    "169.254.170.23",
+    "AWS (EKS Pod Identity)",
+    "instance-metadata",
+    paste0(
+      "https://docs.aws.amazon.com/eks/latest/userguide/",
+      "pod-id-agent-setup.html"
     ),
-    c(
-      "fd00:ec2::23",
-      "AWS (EKS Pod Identity, IPv6)",
-      "instance-metadata",
-      paste0(
-        "https://docs.aws.amazon.com/eks/latest/userguide/",
-        "pod-id-agent-setup.html"
-      ),
-      paste(
-        "The agent uses the loopback (localhost) IP address 169.254.170.23 for",
-        "IPv4 and the localhost IP address [fd00:ec2::23] for IPv6."
-      )
+    paste(
+      "The agent uses the loopback (localhost) IP address 169.254.170.23 for",
+      "IPv4 and the localhost IP address [fd00:ec2::23] for IPv6."
+    )
+  ),
+  c(
+    "fd00:ec2::23",
+    "AWS (EKS Pod Identity, IPv6)",
+    "instance-metadata",
+    paste0(
+      "https://docs.aws.amazon.com/eks/latest/userguide/",
+      "pod-id-agent-setup.html"
     ),
-    c(
-      "169.254.0.23",
-      "Tencent Cloud",
-      "instance-metadata",
-      paste0(
-        "http://web.archive.org/web/20260210034812/",
-        "https://www.tencentcloud.com/document/product/213/32364"
-      ),
-      "metadata_base_url = http://169.254.0.23/"
+    paste(
+      "The agent uses the loopback (localhost) IP address 169.254.170.23 for",
+      "IPv4 and the localhost IP address [fd00:ec2::23] for IPv6."
+    )
+  ),
+  c(
+    "169.254.0.23",
+    "Tencent Cloud",
+    "instance-metadata",
+    paste0(
+      "http://web.archive.org/web/20260210034812/",
+      "https://www.tencentcloud.com/document/product/213/32364"
     ),
-    c(
-      "fd20:ce::254",
-      "GCP (IPv6-only instances)",
-      "instance-metadata",
-      "https://docs.cloud.google.com/compute/docs/metadata/querying-metadata",
-      paste(
-        "The IPv6 address (only for IPv6-only instances):",
-        "http://fd20:ce::254/computeMetadata/v1"
-      )
+    "metadata_base_url = http://169.254.0.23/"
+  ),
+  c(
+    "fd20:ce::254",
+    "GCP (IPv6-only instances)",
+    "instance-metadata",
+    "https://docs.cloud.google.com/compute/docs/metadata/querying-metadata",
+    paste(
+      "The IPv6 address (only for IPv6-only instances):",
+      "http://fd20:ce::254/computeMetadata/v1"
+    )
+  ),
+  c(
+    "169.254.42.42",
+    "Scaleway",
+    "instance-metadata",
+    paste0(
+      "https://www.scaleway.com/en/docs/instances/reference-content/",
+      "manual-configuration-private-ips/"
     ),
-    c(
-      "169.254.42.42",
-      "Scaleway",
-      "instance-metadata",
-      paste0(
-        "https://www.scaleway.com/en/docs/instances/reference-content/",
-        "manual-configuration-private-ips/"
-      ),
-      paste(
-        "The endpoint for the Scaleway Metadata API is 169.254.42.42/32, and",
-        "the gateway depends on your Instance."
-      )
+    paste(
+      "The endpoint for the Scaleway Metadata API is 169.254.42.42/32, and",
+      "the gateway depends on your Instance."
+    )
+  ),
+  c(
+    "fd00:42::42",
+    "Scaleway (IPv6)",
+    "instance-metadata",
+    paste0(
+      "https://github.com/scaleway/scaleway-sdk-go/blob/",
+      "25895fc5ce562db9b94242f507ffbb553347a73f/api/instance/v1/",
+      "instance_metadata_sdk.go#L22"
     ),
-    c(
-      "fd00:42::42",
-      "Scaleway (IPv6)",
-      "instance-metadata",
-      paste0(
-        "https://github.com/scaleway/scaleway-sdk-go/blob/",
-        "25895fc5ce562db9b94242f507ffbb553347a73f/api/instance/v1/",
-        "instance_metadata_sdk.go#L22"
-      ),
-      "metadataAPIv6 = \"http://[fd00:42::42]\""
-    ),
-    c(
-      "fd00:a9fe:a9fe::1",
-      "Linode (Akamai)",
-      "instance-metadata",
-      "https://techdocs.akamai.com/cloud-computing/docs/metadata-service-api",
-      paste(
-        "the Metadata API is accessible via link-local addresses,",
-        "specifically: IPv4: 169.254.169.254 IPv6: fd00:a9fe:a9fe::1,",
-        "fe80::a9fe:a9fe"
-      )
-    ),
-    c(
-      "fe80::a9fe:a9fe",
-      "Linode (Akamai)",
-      "instance-metadata",
-      "https://techdocs.akamai.com/cloud-computing/docs/metadata-service-api",
-      paste(
-        "the Metadata API is accessible via link-local addresses,",
-        "specifically: IPv4: 169.254.169.254 IPv6: fd00:a9fe:a9fe::1,",
-        "fe80::a9fe:a9fe"
-      )
+    "metadataAPIv6 = \"http://[fd00:42::42]\""
+  ),
+  c(
+    "fd00:a9fe:a9fe::1",
+    "Linode (Akamai)",
+    "instance-metadata",
+    "https://techdocs.akamai.com/cloud-computing/docs/metadata-service-api",
+    paste(
+      "the Metadata API is accessible via link-local addresses,",
+      "specifically: IPv4: 169.254.169.254 IPv6: fd00:a9fe:a9fe::1,",
+      "fe80::a9fe:a9fe"
+    )
+  ),
+  c(
+    "fe80::a9fe:a9fe",
+    "Linode (Akamai)",
+    "instance-metadata",
+    "https://techdocs.akamai.com/cloud-computing/docs/metadata-service-api",
+    paste(
+      "the Metadata API is accessible via link-local addresses,",
+      "specifically: IPv4: 169.254.169.254 IPv6: fd00:a9fe:a9fe::1,",
+      "fe80::a9fe:a9fe"
     )
   )
+)
+
+domain_provider_endpoints <- function() {
   closed_domain(
     "provider_endpoints",
     1L,
     policy_table(
-      rows,
+      provider_endpoint_rows,
       c("address", "provider", "kind", "source", "quote"),
       retrieved = "2026-09-25"
     )
   )
 }
 
-domain_metadata_hostnames <- function() {
-  google <- paste0(
-    "https://docs.cloud.google.com/compute/docs/metadata/",
-    "querying-metadata"
-  )
-  rows <- list(
-    c(
-      "metadata.google.internal",
-      "169.254.169.254",
-      "GCP",
-      google,
-      paste(
-        "The DNS name: http://metadata.google.internal/computeMetadata/v1",
-        "(Recommended)"
-      )
+# GCP's metadata-server page, which both GCP rows cite.
+metadata_google_source <- paste0(
+  "https://docs.cloud.google.com/compute/docs/metadata/",
+  "querying-metadata"
+)
+
+# Gate 5's rows: hostname, address, provider, source and the vendor's quote.
+metadata_hostname_rows <- list(
+  c(
+    "metadata.google.internal",
+    "169.254.169.254",
+    "GCP",
+    metadata_google_source,
+    paste(
+      "The DNS name: http://metadata.google.internal/computeMetadata/v1",
+      "(Recommended)"
+    )
+  ),
+  c(
+    "metadata.goog",
+    "169.254.169.254",
+    "GCP",
+    metadata_google_source,
+    "http://metadata.goog/computeMetadata/v1"
+  ),
+  c(
+    "metadata.tencentyun.com",
+    "169.254.0.23",
+    "Tencent Cloud",
+    paste0(
+      "http://web.archive.org/web/20260121135137/",
+      "https://www.tencentcloud.com/document/product/213/4934"
     ),
-    c(
-      "metadata.goog",
-      "169.254.169.254",
-      "GCP",
-      google,
-      "http://metadata.goog/computeMetadata/v1"
+    paste(
+      "To view all the instance metadata within a running instance, use the",
+      "following URI: http://metadata.tencentyun.com/latest/meta-data/"
+    )
+  ),
+  c(
+    "api.metadata.cloud.ibm.com",
+    "169.254.169.254",
+    "IBM Cloud VPC",
+    paste0(
+      "http://web.archive.org/web/20251206195733/",
+      "https://cloud.ibm.com/apidocs/vpc-metadata"
     ),
-    c(
-      "metadata.tencentyun.com",
-      "169.254.0.23",
-      "Tencent Cloud",
+    paste(
+      "When the metadata_service.protocol property is http, the endpoint URL",
+      "may contain either the service's IP address http://169.254.169.254 or",
+      "the service's hostname http://api.metadata.cloud.ibm.com."
+    )
+  ),
+  c(
+    "metadata.exoscale.com",
+    "169.254.169.254",
+    "Exoscale",
+    paste0(
+      "https://community.exoscale.com/product/compute/instances/how-to/",
+      "cloud-init-user-data/"
+    ),
+    "curl http://metadata.exoscale.com/latest/meta-data"
+  ),
+  # Admitted by the maintainer's ruling of 2026-10-22 (SSRF-figjvukt).
+  c(
+    "metadata",
+    "169.254.169.254",
+    "GCP",
+    paste0(
+      "http://web.archive.org/web/20261101192936/",
+      "https://docs.cloud.google.com/compute/docs/troubleshooting/",
+      "troubleshoot-metadata-server"
+    ),
+    paste(
+      "To resolve this proxy issue, add the metadata server hostname and IP",
+      "address to the environment variable NO_PROXY",
       paste0(
-        "http://web.archive.org/web/20260121135137/",
-        "https://www.tencentcloud.com/document/product/213/4934"
-      ),
-      paste(
-        "To view all the instance metadata within a running instance, use the",
-        "following URI: http://metadata.tencentyun.com/latest/meta-data/"
+        "export no_proxy=169.254.169.254,fd20:ce::254,metadata,",
+        "metadata.google.internal"
       )
-    ),
-    c(
-      "api.metadata.cloud.ibm.com",
-      "169.254.169.254",
-      "IBM Cloud VPC",
-      paste0(
-        "http://web.archive.org/web/20251206195733/",
-        "https://cloud.ibm.com/apidocs/vpc-metadata"
-      ),
-      paste(
-        "When the metadata_service.protocol property is http, the endpoint URL",
-        "may contain either the service's IP address http://169.254.169.254 or",
-        "the service's hostname http://api.metadata.cloud.ibm.com."
-      )
-    ),
-    c(
-      "metadata.exoscale.com",
-      "169.254.169.254",
-      "Exoscale",
-      paste0(
-        "https://community.exoscale.com/product/compute/instances/how-to/",
-        "cloud-init-user-data/"
-      ),
-      "curl http://metadata.exoscale.com/latest/meta-data"
     )
   )
+)
+
+domain_metadata_hostnames <- function() {
   closed_domain(
     "metadata_hostnames",
-    1L,
+    2L,
     policy_table(
-      rows,
+      metadata_hostname_rows,
       c("hostname", "address", "provider", "source", "quote"),
-      retrieved = "2026-09-25"
+      retrieved = c(rep("2026-09-25", 5L), "2026-10-31")
     )
   )
 }
@@ -302,11 +329,12 @@ domain_metadata_headers <- function() {
 }
 
 # Binds rows of equal length into a data frame with the given columns, and
-# stamps the retrieval date on each.
+# stamps the retrieval date on each: one date for all rows, or one per row.
 policy_table <- function(rows, columns, retrieved) {
   m <- do.call(rbind, rows)
   colnames(m) <- columns
   out <- as.data.frame(m)
+  stopifnot(length(retrieved) %in% c(1L, nrow(out)))
   out$retrieved <- retrieved
   out
 }

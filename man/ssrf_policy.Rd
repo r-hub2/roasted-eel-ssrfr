@@ -83,7 +83,9 @@ ASCII-lowercased, one trailing root dot removed. A rule matches that name
 exactly, unless it begins with \code{.}, in which case it matches every proper
 subdomain and not the bare name: \code{".corp"} matches \code{api.corp}, not \code{corp}.
 No other wildcard exists. An address literal is not a hostname rule; write
-it as a range. The policy stores the normalized rules.
+it as a range. A rule with an empty label (\code{"a..b"}), or an \verb{xn--} label
+that is not a genuine A-label, is an error. The policy stores the normalized
+rules.
 
 Ranges are CIDR blocks read by \code{raddr}, such as \code{"10.0.0.0/8"} or
 \code{"2001:db8::/32"}. A single address is a \verb{/32} or \verb{/128}, and a block with

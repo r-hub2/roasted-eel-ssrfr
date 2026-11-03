@@ -90,7 +90,7 @@ check_request <- function(request, policy, label = plan_label("request")) {
   if (anyDuplicated(given)) {
     request_argument_error(paste0(label(), " names a field more than once."))
   }
-  method <- check_method(request$method %||% "GET", label)
+  method <- check_method(default_if_null(request$method, "GET"), label)
   headers <- check_headers(request$headers, policy, label)
   body <- check_body(request$body, method, label)
   carry <- check_carry(request$carry, headers, label)
@@ -115,6 +115,27 @@ check_headers <- function(headers, policy, label) {
   if (is.null(headers) || !length(headers)) {
     return(stats::setNames(character(), character()))
   }
+  headers <- check_headers_shape(headers, label)
+  fields <- names(headers)
+  headers <- enc2utf8(headers)
+  lower <- ascii_lower(fields)
+  markers <- ascii_lower(domain_metadata_headers()$header)
+  for (i in seq_along(headers)) {
+    check_headers_entry(
+      fields[[i]],
+      lower[[i]],
+      headers[[i]],
+      markers,
+      policy,
+      label("headers", i)
+    )
+  }
+  headers
+}
+
+# Checks the shape of a non-empty `headers`, a named character vector with no
+# NA or a named list of single strings, and returns it as the vector.
+check_headers_shape <- function(headers, label) {
   if (is.list(headers)) {
     ok <- all(vapply(headers, is_string, logical(1L)))
     if (!ok) {
@@ -143,38 +164,39 @@ check_headers <- function(headers, policy, label) {
       " must be named."
     ))
   }
-  headers <- enc2utf8(headers)
-  lower <- ascii_lower(fields)
-  markers <- ascii_lower(domain_metadata_headers()$header)
-  entry <- function(i) label("headers", i)
-  for (i in seq_along(headers)) {
-    if (!grepl(http_token, fields[[i]])) {
-      request_error(paste0(
-        entry(i),
-        " has a field name that is not a valid token (RFC 9110 \u00a75.1)."
-      ))
-    }
-    if (lower[[i]] %in% transport_owned_fields) {
-      request_error(paste0(
-        entry(i),
-        " names a field the transport owns; it cannot be supplied."
-      ))
-    }
-    if (grepl("[\r\n]", headers[[i]])) {
-      request_error(paste0(
-        entry(i),
-        " has a value containing CR or LF; it is refused, never sanitized."
-      ))
-    }
-    if (lower[[i]] %in% markers && !names_provider_endpoint(policy)) {
-      request_error(paste0(
-        entry(i),
-        " is a metadata-service request marker; it is refused unless the ",
-        "policy's `allow_ranges` names a provider endpoint exactly."
-      ))
-    }
-  }
   headers
+}
+
+# The rules on one header field, in order (\u00a72.3): a token name, not a
+# transport-owned field, no CR or LF in the value, and no metadata-service
+# marker unless the policy names a provider endpoint. `lower` is the name
+# ASCII-lowercased; `entry` names the field in a message.
+check_headers_entry <- function(field, lower, value, markers, policy, entry) {
+  if (!grepl(http_token, field)) {
+    request_error(paste0(
+      entry,
+      " has a field name that is not a valid token (RFC 9110 \u00a75.1)."
+    ))
+  }
+  if (lower %in% transport_owned_fields) {
+    request_error(paste0(
+      entry,
+      " names a field the transport owns; it cannot be supplied."
+    ))
+  }
+  if (grepl("[\r\n]", value)) {
+    request_error(paste0(
+      entry,
+      " has a value containing CR or LF; it is refused, never sanitized."
+    ))
+  }
+  if (lower %in% markers && !names_provider_endpoint(policy)) {
+    request_error(paste0(
+      entry,
+      " is a metadata-service request marker; it is refused unless the ",
+      "policy's `allow_ranges` names a provider endpoint exactly."
+    ))
+  }
 }
 
 # A body: NULL, a raw vector, or a single string sent as its UTF-8 bytes.

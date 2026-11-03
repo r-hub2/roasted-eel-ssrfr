@@ -135,6 +135,40 @@ test_that("a URL refused before step 7 is never resolved", {
   expect_identical(seen$queries, character())
 })
 
+# §5 gate 5 matches exact whole hosts, after ASCII case folding and removal of
+# one root dot. The bare GCP name `metadata` is on the list (SSRF-figjvukt): it
+# refuses by name before step 7, whatever it would resolve to.
+test_that("gate 5 refuses bare metadata without resolving it", {
+  for (url in c("http://metadata/", "http://METADATA/", "http://metadata./")) {
+    seen <- mock_resolver("93.184.216.34")
+    res <- inspect_l1(url)
+    expect_identical(res$code, "cloud-metadata", label = url)
+    expect_identical(res$detail$gate, "5", label = url)
+    expect_identical(seen$queries, character(), label = url)
+  }
+})
+
+# Names gate 5 declines (§5: no current vendor document names them as an
+# endpoint of gate 2's table, or no exact whole-host entry can hold them) and
+# near-misses of listed names: none is refused by name, so each resolves once
+# and its public answer admits.
+test_that("gate 5 matches no declined name and no near-miss", {
+  urls <- c(
+    "http://instance-data/",
+    "http://instance-data.ec2.internal/",
+    "http://instance-data.us-east-1.compute.internal/",
+    "http://metadata.example/",
+    "http://xmetadata/",
+    "http://metadata-server/",
+    "http://x.metadata/"
+  )
+  for (url in urls) {
+    seen <- mock_resolver("93.184.216.34")
+    expect_identical(inspect_l1(url)$code, NA_character_, label = url)
+    expect_identical(length(seen$queries), 1L, label = url)
+  }
+})
+
 # §5.0, "Names resolve as absolute": the query carries a single trailing root
 # dot, so no search domain applies; the host itself keeps libcurl's spelling,
 # which the Host header, SNI and the pin key use.
@@ -154,9 +188,9 @@ test_that("a name is resolved as absolute, with one trailing root dot", {
     expect_identical(seen$queries, cases[[url]][["query"]], label = url)
     expect_identical(res$host, cases[[url]][["host"]], label = url)
   }
-  hop <- ssrfr:::parse_hop("http://intranet/", ssrf_policy())
+  hop <- parse_hop("http://intranet/", ssrf_policy())
   expect_identical(
-    ssrfr:::resolve_hop(hop, ssrf_policy())$query,
+    resolve_hop(hop, ssrf_policy())$query,
     "intranet."
   )
   expect_identical(hop$wire, "http://intranet/")
@@ -205,8 +239,8 @@ test_that("one bad address refuses the whole answer set", {
   expect_identical(res$addresses[[2L]]$detail$gate, "1a")
 
   # The internal step L2 reuses: nothing validated from a refused set.
-  hop <- ssrfr:::parse_hop("http://dual.example/", ssrf_policy())
-  resolved <- ssrfr:::resolve_hop(hop, ssrf_policy())
+  hop <- parse_hop("http://dual.example/", ssrf_policy())
+  resolved <- resolve_hop(hop, ssrf_policy())
   expect_identical(resolved$finding$code, "loopback")
   expect_identical(resolved$finding$address, "::1")
   expect_identical(resolved$validated, character())
@@ -234,8 +268,8 @@ test_that("L1 returns per-address evidence and no roll-up boolean", {
   expect_match(out, "93.184.216.34: none", fixed = TRUE)
 
   # The internal step L2 reuses returns the validated set with its facts.
-  hop <- ssrfr:::parse_hop("https://example.com/", ssrf_policy())
-  resolved <- ssrfr:::resolve_hop(hop, ssrf_policy())
+  hop <- parse_hop("https://example.com/", ssrf_policy())
+  resolved <- resolve_hop(hop, ssrf_policy())
   expect_null(resolved$finding)
   expect_identical(
     resolved$validated,
@@ -332,4 +366,48 @@ test_that("a failing raddr wrapper refuses an answer as malformed-address", {
       }
     }
   }
+})
+
+# §8 item 32: an answer raddr parses into a value it cannot then say is or
+# is not an address is a raddr failure, `malformed-address`, not an answer
+# that is no address (`unresolvable`, §6.6).
+test_that("an answer raddr cannot report missing or not is malformed", {
+  pton <- dep_raddr_pton
+  # One raddr_address whose is.na() is no single flag.
+  unreadable <- structure(
+    data.frame(x = integer()),
+    class = c("raddr_address", "data.frame")
+  )
+  local_mocked_bindings(
+    dep_raddr_pton = function(text) {
+      if (identical(text, "203.0.113.9")) unreadable else pton(text)
+    }
+  )
+  mock_resolver("93.184.216.34,203.0.113.9")
+  res <- inspect_l1("http://a.example/")
+  expect_identical(res$code, "malformed-address")
+  expect_identical(res$cause, NA_character_)
+  expect_identical(res$step, 8L)
+})
+
+# INV-4, INV-5: the one resolver call asks libcurl for every address of both
+# families and raises on failure, which the caller turns into `unresolvable`.
+test_that("the resolver asks libcurl once for every address of both families", {
+  calls <- new.env(parent = emptyenv())
+  calls$args <- list()
+  local_mocked_bindings(
+    nslookup = function(...) {
+      calls$args[[length(calls$args) + 1L]] <- list(...)
+      c("93.184.216.34", "2606:4700:4700::1111")
+    },
+    .package = "curl"
+  )
+  b <- ssrf_prepare_hop("http://a.example/", ssrf_policy(), request = list())
+  expect_s3_class(b, "ssrfr_binding")
+  expect_identical(b$validated, c("93.184.216.34", "2606:4700:4700::1111"))
+  expect_length(calls$args, 1L)
+  expect_identical(
+    calls$args[[1L]],
+    list("a.example.", ipv4_only = FALSE, multiple = TRUE, error = TRUE)
+  )
 })

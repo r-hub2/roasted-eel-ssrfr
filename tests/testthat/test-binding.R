@@ -68,6 +68,85 @@ test_that("a refused hop returns a refusal with its reason code and hop", {
   expect_identical(r$address, "10.0.0.5")
 })
 
+# r-binding.md §2.6, §6.5: a literal's pin target is its canonical text. When
+# raddr classified the address and then fails to format it, the hop refuses
+# as `malformed-address` at gate 1b, naming the host, and binds nothing.
+test_that("a literal raddr cannot format once classified refuses", {
+  classified <- new.env(parent = emptyenv())
+  classified$yes <- FALSE
+  reachability <- dep_raddr_reachability
+  format_address <- dep_raddr_format
+  local_mocked_bindings(
+    dep_raddr_reachability = function(x) {
+      classified$yes <- TRUE
+      reachability(x)
+    },
+    dep_raddr_format = function(x) {
+      if (classified$yes) stop("raddr") else format_address(x)
+    }
+  )
+  hosts <- c(
+    "http://93.184.216.34/" = "93.184.216.34",
+    "http://[2606:4700:4700::1111]/" = "[2606:4700:4700::1111]"
+  )
+  for (url in names(hosts)) {
+    classified$yes <- FALSE
+    r <- ssrf_prepare_hop(url, ssrf_policy(), request = list())
+    expect_s3_class(r, "ssrfr_refusal")
+    expect_identical(r$code, "malformed-address", label = url)
+    expect_identical(r$detail$step, 8L, label = url)
+    expect_identical(r$detail$gate, "1b", label = url)
+    expect_identical(r$detail$tier, 1L, label = url)
+    expect_identical(r$host, hosts[[url]], label = url)
+  }
+})
+
+# §4.2, INV-11: a zone-ID literal, and a host WHATWG cannot read, refuse at
+# prepare as `parse`, before any resolution, whatever address or name the
+# rest of the host spells. The percent-encoded trailing stops are V0541,
+# V0542, V0551 and V0552, pending on rurl: whichever code they reach, they
+# refuse.
+test_that("a zone ID or an unreadable host refuses at prepare, unresolved", {
+  seen <- mock_answers("93.184.216.34")
+  urls <- c(
+    "http://[::1%25lo0]/",
+    "http://[fd00:ec2::254%25lo0]/",
+    "http://[::ffff:127.0.0.1%25lo0]/",
+    "http://[fe80::1%25eth0]/",
+    "http://[fe80::1%eth0]/",
+    "http://metadata﹒google﹒internal/",
+    "http://metadata.google.internal﹒/",
+    "http://metadata.google.internal‍/",
+    "http://meta‍data.google.internal/"
+  )
+  for (url in urls) {
+    r <- ssrf_prepare_hop(url, ssrf_policy(), request = list())
+    expect_s3_class(r, "ssrfr_refusal")
+    expect_identical(r$code, "parse", label = url)
+  }
+  for (url in c(
+    "http://metadata.google.internal%E3%80%82/",
+    "http://metadata.google.internal%EF%BC%8E/",
+    "http://metadata%E3%80%82/",
+    "http://metadata%EF%BC%8E/"
+  )) {
+    r <- ssrf_prepare_hop(url, ssrf_policy(), request = list())
+    expect_s3_class(r, "ssrfr_refusal")
+    expect_true(r$code %in% c("parse", "cloud-metadata"), label = url)
+  }
+  expect_identical(seen$queries, character())
+
+  # A metadata name off the built-in list refuses on its answer (§5).
+  mock_answers("169.254.169.254")
+  r <- ssrf_prepare_hop(
+    "http://instance-data.ec2.internal/",
+    ssrf_policy(),
+    request = list()
+  )
+  expect_s3_class(r, "ssrfr_refusal")
+  expect_identical(r$code, "cloud-metadata")
+})
+
 test_that("a failed resolution is an operational failure, not a refusal", {
   for (answers in list(function(q) stop("no"), character(), "not-an-address")) {
     mock_answers(answers)
@@ -136,6 +215,111 @@ test_that("a binding carries the identity, the plan and the validated set", {
   )
   expect_identical(b$validated, "2606:2800:220:1:248:1893:25c8:1946")
   expect_identical(b$origin$port, 443L)
+})
+
+# REQ-057 (§0 S4, §2.3, §6.2): a refusal and a binding for a U-label URL carry
+# the A-label host the decision used. The input is built with intToUtf8(): a
+# "\u" escape parsed in a C-locale session is unmarked and refuses as `parse`.
+test_that("a U-label URL's refusal and binding carry the A-label host", {
+  u_label <- paste0("b", intToUtf8(0xFC), "cher.example")
+  a_label <- "xn--bcher-kva.example"
+  url <- paste0("https://", u_label, "/")
+
+  # Refused by a rule written as the A-label (step 6), before any query, and
+  # by the address the A-label resolved to (step 8).
+  seen <- mock_answers("10.0.0.5")
+  r <- ssrf_prepare_hop(
+    url,
+    ssrf_policy(deny_hosts = a_label),
+    request = list()
+  )
+  expect_s3_class(r, "ssrfr_refusal")
+  expect_identical(r$code, "host-denied")
+  expect_identical(r$host, a_label)
+  expect_identical(seen$queries, character())
+  r <- ssrf_prepare_hop(url, ssrf_policy(), request = list())
+  expect_s3_class(r, "ssrfr_refusal")
+  expect_identical(r$code, "private")
+  expect_identical(r$host, a_label)
+  expect_identical(seen$queries, paste0(a_label, "."))
+
+  seen <- mock_answers("93.184.216.34")
+  b <- ssrf_prepare_hop(url, ssrf_policy(), request = list())
+  expect_s3_class(b, "ssrfr_binding")
+  expect_identical(seen$queries, paste0(a_label, "."))
+  expect_identical(b$url, paste0("https://", a_label, "/"))
+  expect_identical(b$origin$host, a_label)
+  expect_identical(b$tls$name, a_label)
+})
+
+# §2.5: a binding captures its policy by value, and a policy is a value: a
+# list of atomic fields, no environment or other reference among them. So no
+# edit to the caller's policy, or to any copy of it, reaches the binding's or
+# changes a decision already made, and the binding refuses edits to its own.
+test_that("a policy edited after prepare changes nothing already decided", {
+  skip_if_no_webfakes()
+  web <- local_test_server()
+  port <- web$get_port()
+  mock_answers("127.0.0.1")
+  policy <- loopback_policy(
+    port,
+    deny_hosts = "denied.example.invalid",
+    user_agent = "ua-at-prepare"
+  )
+  expect_type(policy, "list")
+  expect_true(all(vapply(policy, is.atomic, logical(1))))
+  b <- ssrf_prepare_hop(
+    pinned_url(port, "/echo-headers"),
+    policy,
+    request = list()
+  )
+  expect_s3_class(b, "ssrfr_binding")
+
+  # Every way R edits a value, on the caller's policy and on a copy of it.
+  edit <- function(p) {
+    p$user_agent <- "ua-edited"
+    p[["max_response_size"]] <- 1
+    p$deny_hosts <- character()
+    p$allow_ports <- 80L
+    attr(p, "class") <- NULL
+    p
+  }
+  copy <- policy
+  copy <- edit(copy)
+  policy$user_agent <- "ua-edited"
+  policy[["max_response_size"]] <- 1
+  attr(policy, "extra") <- TRUE
+
+  # Nor can the binding's own policy or budget be written.
+  expect_error(b$policy <- copy)
+  expect_error(b[["policy"]] <- copy)
+  expect_error(assign("policy", copy, envir = b))
+  expect_error(b$policy$user_agent <- "ua-edited")
+  expect_error(b[["policy"]][["max_response_size"]] <- 1)
+  expect_error(attr(b$policy, "class") <- NULL)
+  expect_error(b$budget$max_redirects <- 99)
+
+  expect_s3_class(b$policy, "ssrfr_policy")
+  expect_identical(b$policy$user_agent, "ua-at-prepare")
+  expect_identical(b$policy$max_response_size, 10 * 1024^2)
+  expect_identical(b$policy$deny_hosts, "denied.example.invalid")
+  expect_identical(b$policy$allow_ports, c(80L, 443L, as.integer(port)))
+  expect_identical(b$budget$max_redirects, 20)
+
+  # The fetch decides under the policy the binding captured: its user agent,
+  # and a body larger than the edited 1-byte limit.
+  r <- ssrf_fetch(b)
+  expect_s3_class(r, "ssrfr_response")
+  expect_identical(r$status, 200L)
+  expect_match(body_text(r), "User-Agent=ua-at-prepare", fixed = TRUE)
+
+  # A policy decides later as it did when built, whatever became of a copy.
+  built <- ssrf_policy(deny_hosts = "denied.example.invalid")
+  copy <- edit(built)
+  expect_identical(
+    ssrf_inspect_url("http://denied.example.invalid/", built)$code,
+    "host-denied"
+  )
 })
 
 test_that("a name is resolved once per hop, and never again by the fetch", {
@@ -233,7 +417,7 @@ test_that("binding state is read-only fields over a store set_state() writes", {
     every
   )
 
-  set <- ssrfr:::set_state
+  set <- set_state
   set(b, status = 302L, location = "/next", location_count = 1L)
   expect_identical(b$state$status, 302L)
   expect_identical(b$state$location, "/next")

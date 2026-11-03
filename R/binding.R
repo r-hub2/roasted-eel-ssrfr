@@ -273,56 +273,21 @@ prepare_hop <- function(url, policy, plan, started, from = NULL) {
   # An outcome records the URL the hop resolved to (§3.2): on a redirect hop,
   # not a Location that may be relative, which would display as withheld.
   # Only a hop whose Location did not resolve records the Location.
-  shown <- hop$url %||% url
+  shown <- default_if_null(hop$url, url)
   redirect <- NULL
   if (!is.null(from) && is.null(hop$finding)) {
-    origin <- list(scheme = hop$scheme, host = hop$host, port = hop$port)
-    inherited <- redirect_plan(
-      plan,
-      from$state$status,
-      cross_origin = !same_origin(from$origin, origin)
-    )
-    # §2.3, §2.5: the plan this hop sends, once the redirect has dropped
-    # what it drops, is checked under this hop's policy, which may not admit
-    # a field the previous hop's did. A dropped field is not checked. The
-    # caller passed `from`, not `request`, so a message names an entry by
-    # its place in `from$request`, the plan inherited, not in the plan
-    # derived from it.
-    label <- plan_label("from$request", function(field, i) {
-      switch(
-        field,
-        headers = inherited$kept[[i]],
-        carry = match(inherited$plan$carry[[i]], from$request$carry),
-        i
-      )
-    })
-    plan <- check_request(inherited$plan, policy, label)
-    redirect <- c(list(from_hop = from$hop), inherited$record)
+    inherited <- prepare_hop_redirect(hop, plan, policy, from)
+    plan <- inherited$plan
+    redirect <- inherited$redirect
   }
   if (is.null(hop$finding)) {
     hop$finding <- host_policy(hop, policy)
   }
   validated <- character()
   if (is.null(hop$finding) && hop$host_kind %in% c("ipv4", "ipv6")) {
-    gates <- address_gates(hop$address, policy)
-    hop$finding <- gates$finding
-    if (is.null(hop$finding)) {
-      # The pin target is the literal's canonical text (r-binding.md §2.6).
-      canonical <- canonical_address(hop$address)
-      if (!is_string(canonical)) {
-        hop$finding <- new_finding(
-          "malformed-address",
-          8L,
-          address = hop$address,
-          gate = "1b",
-          tier = 1L
-        )
-      }
-      validated <- canonical
-    }
-    if (!is.null(hop$finding)) {
-      hop$finding$host <- hop$host
-    }
+    literal <- prepare_hop_literal(hop, policy)
+    hop$finding <- literal$finding
+    validated <- literal$validated
   } else if (is.null(hop$finding)) {
     resolution <- resolve_hop(hop, policy)
     hop$finding <- resolution$finding
@@ -343,6 +308,63 @@ prepare_hop <- function(url, policy, plan, started, from = NULL) {
     ))
   }
   new_binding(hop, policy, plan, validated, hop_index, spent, redirect)
+}
+
+# A redirect hop's plan (§2.3): `from`'s plan transformed for the previous
+# response and the new origin, then checked under this hop's policy, which
+# raises on a field it refuses. Returns a list: `plan`, what the hop sends,
+# and `redirect`, the binding's record of the redirect.
+prepare_hop_redirect <- function(hop, plan, policy, from) {
+  origin <- list(scheme = hop$scheme, host = hop$host, port = hop$port)
+  inherited <- redirect_plan(
+    plan,
+    from$state$status,
+    cross_origin = !same_origin(from$origin, origin)
+  )
+  # §2.3, §2.5: the plan this hop sends, once the redirect has dropped
+  # what it drops, is checked under this hop's policy, which may not admit
+  # a field the previous hop's did. A dropped field is not checked. The
+  # caller passed `from`, not `request`, so a message names an entry by
+  # its place in `from$request`, the plan inherited, not in the plan
+  # derived from it.
+  label <- plan_label("from$request", function(field, i) {
+    switch(
+      field,
+      headers = inherited$kept[[i]],
+      carry = match(inherited$plan$carry[[i]], from$request$carry),
+      i
+    )
+  })
+  list(
+    plan = check_request(inherited$plan, policy, label),
+    redirect = c(list(from_hop = from$hop), inherited$record)
+  )
+}
+
+# Step 8 for an address literal: gates 1-3 on the address, then its
+# canonical text, the pin target (r-binding.md §2.6). Returns a list:
+# `finding`, carrying the hop's host, or NULL, and `validated`.
+prepare_hop_literal <- function(hop, policy) {
+  gates <- address_gates(hop$address, policy)
+  finding <- gates$finding
+  validated <- character()
+  if (is.null(finding)) {
+    canonical <- canonical_address(hop$address)
+    if (!is_string(canonical)) {
+      finding <- new_finding(
+        "malformed-address",
+        8L,
+        address = hop$address,
+        gate = "1b",
+        tier = 1L
+      )
+    }
+    validated <- canonical
+  }
+  if (!is.null(finding)) {
+    finding$host <- hop$host
+  }
+  list(finding = finding, validated = validated)
 }
 
 # A finding of steps 1-8 as the outcome ssrf_prepare_hop() returns: a refusal
@@ -396,9 +418,17 @@ new_binding <- function(
     total_timeout = policy$total_timeout,
     elapsed = spent
   )
-  # §2.4: the values live in a private store; `state` shows each field as a
-  # read-only active binding and is locked once, never unlocked. The store
-  # is `state`'s enclosure, where only set_state() looks for it.
+  b$state <- new_binding_state(spent)
+  lockEnvironment(b, bindings = TRUE)
+  class(b) <- "ssrfr_binding"
+  b
+}
+
+# A new binding's `state`, `spent` seconds into the budget. §2.4: the values
+# live in a private store; `state` shows each field as a read-only active
+# binding and is locked once, never unlocked. The store is `state`'s
+# enclosure, where only set_state() looks for it.
+new_binding_state <- function(spent) {
   store <- list2env(
     list(
       fetchable = TRUE,
@@ -418,10 +448,7 @@ new_binding <- function(
     makeActiveBinding(field, state_field(store, field), state)
   }
   lockEnvironment(state, bindings = TRUE)
-  b$state <- state
-  lockEnvironment(b, bindings = TRUE)
-  class(b) <- "ssrfr_binding"
-  b
+  state
 }
 
 # The active binding that shows `field` of a binding's store. It takes no
@@ -439,7 +466,7 @@ state_field <- function(store, field) {
 set_state <- function(binding, ...) {
   values <- list(...)
   store <- parent.env(binding$state)
-  fields <- names(values) %||% rep("", length(values))
+  fields <- default_if_null(names(values), rep("", length(values)))
   if (!all(fields %in% names(store))) {
     internal_error("set_state() names a field a binding's state lacks.")
   }
@@ -452,18 +479,6 @@ set_state <- function(binding, ...) {
 #' @export
 format.ssrfr_binding <- function(x, ...) {
   state <- x$state
-  plan <- x$request
-  fields <- names(plan$headers)
-  headers <- if (length(fields)) {
-    paste0(toString(fields), " (values withheld)")
-  } else {
-    "none"
-  }
-  body <- if (is.null(plan$body)) {
-    "none"
-  } else {
-    paste0(length(plan$body), " bytes (withheld)")
-  }
   status <- if (isTRUE(state$fetchable)) {
     "fetchable"
   } else if (isTRUE(state$fetched)) {
@@ -472,20 +487,6 @@ format.ssrfr_binding <- function(x, ...) {
     "spent"
   }
   origin <- x$origin
-  redirect <- x$redirect
-  if (!is.null(redirect)) {
-    redirect <- paste0(
-      "  redirect: ",
-      redirect$status,
-      " from hop ",
-      redirect$from_hop,
-      if (redirect$cross_origin) ", cross-origin" else ", same origin",
-      if (length(redirect$dropped)) {
-        paste0("; dropped ", toString(redirect$dropped))
-      },
-      if (redirect$body_dropped) "; body dropped"
-    )
-  }
   c(
     paste0("<ssrfr_binding> (hop ", x$hop, ", ", status, ")"),
     paste0(
@@ -498,20 +499,53 @@ format.ssrfr_binding <- function(x, ...) {
     ),
     paste0("  url: ", redact_url(x$url)),
     paste0("  validated: ", toString(x$validated)),
-    paste0("  pin: ", state$pin_used %||% x$pin),
-    paste0("  method: ", plan$method),
-    paste0("  headers: ", headers),
-    paste0("  body: ", body),
-    if (length(plan$carry)) paste0("  carry: ", toString(plan$carry)),
-    redirect,
+    paste0("  pin: ", default_if_null(state$pin_used, x$pin)),
+    format_ssrfr_binding_request(x$request),
+    format_ssrfr_binding_redirect(x$redirect),
     "  tls: certificate and hostname verified",
     if (!is.null(state$status)) paste0("  status: ", state$status),
     if (!is.null(state$outcome)) paste0("  outcome: ", state$outcome)
   )
 }
 
-#' @export
-print.ssrfr_binding <- function(x, ...) {
-  cat(format(x, ...), sep = "\n")
-  invisible(x)
+# The lines of format.ssrfr_binding() for the request `plan`: its method,
+# header field names and body size, never a value or a byte, and the fields
+# it nominates to carry across an origin.
+format_ssrfr_binding_request <- function(plan) {
+  fields <- names(plan$headers)
+  headers <- if (length(fields)) {
+    paste0(toString(fields), " (values withheld)")
+  } else {
+    "none"
+  }
+  body <- if (is.null(plan$body)) {
+    "none"
+  } else {
+    paste0(length(plan$body), " bytes (withheld)")
+  }
+  c(
+    paste0("  method: ", plan$method),
+    paste0("  headers: ", headers),
+    paste0("  body: ", body),
+    if (length(plan$carry)) paste0("  carry: ", toString(plan$carry))
+  )
+}
+
+# The line of format.ssrfr_binding() for the `redirect` that led to the
+# hop, or NULL for the first hop.
+format_ssrfr_binding_redirect <- function(redirect) {
+  if (is.null(redirect)) {
+    return(NULL)
+  }
+  paste0(
+    "  redirect: ",
+    redirect$status,
+    " from hop ",
+    redirect$from_hop,
+    if (redirect$cross_origin) ", cross-origin" else ", same origin",
+    if (length(redirect$dropped)) {
+      paste0("; dropped ", toString(redirect$dropped))
+    },
+    if (redirect$body_dropped) "; body dropped"
+  )
 }

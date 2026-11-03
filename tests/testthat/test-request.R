@@ -123,11 +123,16 @@ test_that("Authorization, Proxy-Authorization and Cookie cannot be nominated", {
 test_that("metadata markers are refused unless an endpoint is allowed", {
   markers <- ssrf_vocabulary("metadata_headers")$header
   expect_length(markers, 10L)
-  expect_identical(anyDuplicated(tolower(markers)), 0L)
+  expect_identical(anyDuplicated(ascii_lower(markers)), 0L)
   exact <- ssrf_policy(allow_ranges = "169.254.169.254/32")
   broad <- ssrf_policy(allow_ranges = "169.254.0.0/16")
   v6 <- ssrf_policy(allow_ranges = "fd00:ec2::254/128")
-  for (name in c(markers, toupper(markers), tolower(markers))) {
+  upper <- chartr(
+    "abcdefghijklmnopqrstuvwxyz",
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    markers
+  )
+  for (name in c(markers, upper, ascii_lower(markers))) {
     h <- stats::setNames("true", name)
     expect_error(
       prepare(list(headers = h)),
@@ -176,6 +181,24 @@ test_that("a plan of the wrong shape is an invalid argument", {
   for (request in bad) {
     expect_error(
       prepare(request),
+      class = "ssrfr_error_invalid_argument"
+    )
+  }
+})
+
+test_that("a plan naming a field twice is an invalid argument", {
+  twice <- list(
+    stats::setNames(list("GET", "POST"), c("method", "method")),
+    stats::setNames(
+      list(c(`X-A` = "1"), "b", c(`X-B` = "2")),
+      c("headers", "body", "headers")
+    )
+  )
+  for (request in twice) {
+    expect_error(
+      prepare(request),
+      regexp = "`request` names a field more than once.",
+      fixed = TRUE,
       class = "ssrfr_error_invalid_argument"
     )
   }

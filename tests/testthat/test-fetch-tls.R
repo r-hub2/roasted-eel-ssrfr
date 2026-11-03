@@ -174,7 +174,7 @@ test_that("an IPv6 address is pinned, bracketed, with Host kept", {
 
 test_that("ordinary HTTP still works through the guard", {
   skip_if_no_webfakes()
-  web <- webfakes::local_app_process(
+  web <- local_app_server(
     webfakes::httpbin_app(),
     opts = webfakes::server_opts(num_threads = 2)
   )
@@ -194,7 +194,7 @@ test_that("ordinary HTTP still works through the guard", {
 
   for (method in c("POST", "PUT", "PATCH", "DELETE")) {
     r <- get(
-      paste0("/", tolower(method)),
+      paste0("/", ascii_lower(method)),
       list(
         method = method,
         headers = c(`Content-Type` = "application/json"),

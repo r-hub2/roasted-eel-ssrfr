@@ -33,67 +33,46 @@ closed_domain <- function(name, version, entries) {
   entries
 }
 
+# The reason codes (§6.5), each with its meaning, in the domain's key order.
+reason_code_meanings <- c(
+  loopback = "loopback address",
+  private = "private or internal address space",
+  "link-local" = "link-local address",
+  "cloud-metadata" = "a known provider endpoint, by address or by hostname",
+  shared = "shared address space (RFC 6598, CGNAT)",
+  unspecified = "the unspecified address",
+  "this-network" = "0.0.0.0/8 other than the unspecified address",
+  "ipv4-mapped" = "IPv4-mapped IPv6 with a prohibited embedded address",
+  "ipv4-translated" = "IPv4-translated IPv6 with a prohibited embedded address",
+  "ipv4-compatible" = paste(
+    "deprecated IPv4-compatible IPv6 with a",
+    "prohibited embedded address"
+  ),
+  nat64 = "NAT64 address with a prohibited embedded address",
+  "6to4" = "6to4 address",
+  teredo = "Teredo address",
+  isatap = "ISATAP address with a prohibited embedded address",
+  "malformed-address" = "an address that could not be decoded or classified",
+  "numeric-literal" = "ambiguous numeric host encoding",
+  scheme = "scheme not permitted",
+  downgrade = "redirect from a secure to an insecure scheme",
+  userinfo = "embedded credentials in the URL",
+  port = "port not permitted",
+  "host-denied" = "matched a caller deny_hosts rule",
+  "range-denied" = "matched a caller deny_ranges rule",
+  parse = "syntax failure, or the two parsers disagree on the host",
+  multicast = "multicast address",
+  "redirect-limit" = "a redirect arrived after the redirect budget was spent",
+  reserved = "reserved or other special-purpose address space"
+)
+
 domain_reason_codes <- function() {
   closed_domain(
     "reason_codes",
     1L,
     data.frame(
-      code = c(
-        "loopback",
-        "private",
-        "link-local",
-        "cloud-metadata",
-        "shared",
-        "unspecified",
-        "this-network",
-        "ipv4-mapped",
-        "ipv4-translated",
-        "ipv4-compatible",
-        "nat64",
-        "6to4",
-        "teredo",
-        "isatap",
-        "malformed-address",
-        "numeric-literal",
-        "scheme",
-        "downgrade",
-        "userinfo",
-        "port",
-        "host-denied",
-        "range-denied",
-        "parse",
-        "multicast",
-        "redirect-limit",
-        "reserved"
-      ),
-      meaning = c(
-        "loopback address",
-        "private or internal address space",
-        "link-local address",
-        "a known provider endpoint, by address or by hostname",
-        "shared address space (RFC 6598, CGNAT)",
-        "the unspecified address",
-        "0.0.0.0/8 other than the unspecified address",
-        "IPv4-mapped IPv6 with a prohibited embedded address",
-        "IPv4-translated IPv6 with a prohibited embedded address",
-        "deprecated IPv4-compatible IPv6 with a prohibited embedded address",
-        "NAT64 address with a prohibited embedded address",
-        "6to4 address",
-        "Teredo address",
-        "ISATAP address with a prohibited embedded address",
-        "an address that could not be decoded or classified",
-        "ambiguous numeric host encoding",
-        "scheme not permitted",
-        "redirect from a secure to an insecure scheme",
-        "embedded credentials in the URL",
-        "port not permitted",
-        "matched a caller deny_hosts rule",
-        "matched a caller deny_ranges rule",
-        "syntax failure, or the two parsers disagree on the host",
-        "multicast address",
-        "a redirect arrived after the redirect budget was spent",
-        "reserved or other special-purpose address space"
-      )
+      code = names(reason_code_meanings),
+      meaning = unname(reason_code_meanings)
     )
   )
 }

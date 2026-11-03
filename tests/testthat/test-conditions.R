@@ -24,7 +24,7 @@ test_that("a condition records the bare function name, not the call", {
   expect_null(conditionCall(new_ssrfr_error("invalid_argument", "message")))
 })
 
-test_that("a signalled condition is caught by its kind and by its parent", {
+test_that("a signaled condition is caught by its kind and by its parent", {
   expect_error(
     abort_ssrfr("spent_binding", "spent", fn = "ssrf_fetch"),
     class = "ssrfr_error_spent_binding"

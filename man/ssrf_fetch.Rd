@@ -29,7 +29,15 @@ A failure carries \code{cause}, from \code{ssrf_vocabulary("causes")}:
 \code{"connect-failed"}, \code{"timeout"}, \code{"tls-failed"}, \code{"pin-mismatch"},
 \code{"response-too-large"} or \code{"protocol-error"}. Its \code{detail} lists each
 address tried and how the attempt ended, and names the limit that was
-reached.
+reached. A \code{"response-too-large"} failure whose \code{detail$check} is
+\code{"decoded-bytes"} (the body exceeded \code{max_response_size}) also carries
+\code{detail$status}, the final response's status, which
+\code{binding$state$status} records too, and \code{detail$observed_bytes}, the
+decoded body bytes reached, the delivery that exceeded the limit
+included. So a \code{404} with a large body stays distinguishable from a
+large \code{200}. The status is left out when libcurl's and the status
+line's disagree, and a header limit (\code{"header"}) records none. Such a
+binding records no response and no \code{Location}, so it is never a \code{from}.
 }
 \description{
 Makes the request a binding from \code{\link[=ssrf_prepare_hop]{ssrf_prepare_hop()}} describes, connecting
@@ -46,7 +54,9 @@ call with the same binding is an error of class
 \code{ssrfr_error_spent_binding}, even when the first was interrupted. The
 spent binding stays readable: its \code{state} records the response status,
 the \code{Location} field, the address the connection was pinned to and each
-address tried.
+address tried. A recorded status alone does not mean the fetch
+succeeded: a size-limit failure and a \code{"redirect-limit"} refusal record
+one too.
 
 When a name resolved to several addresses, they are tried in the order
 the resolver returned them, moving on only when a connection could not be

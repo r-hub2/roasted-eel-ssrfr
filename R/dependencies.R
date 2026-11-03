@@ -12,6 +12,15 @@
 # are not refusals (r-binding.md §2.2), and their text can quote the URL,
 # userinfo included, which ssrfr never relays (§2.3).
 
+# pslr is reached only through rurl, so ssrfr calls none of it. The import
+# below exists to enforce the floor in DESCRIPTION's Imports: pslr (>= 1.2.2)
+# is the first release that loads the public suffix list under a Turkish or
+# Azeri locale (SSRF-mspjpegk). Without a named import, R CMD check notes the
+# Imports entry as unused.
+#' @importFrom pslr psl_version
+#' @noRd
+NULL
+
 # The fixed rurl bundle (r-binding.md §2.1). It is internal and not
 # caller-configurable (INV-1): every argument is passed on every call that
 # takes it, including those equal to today's defaults.
@@ -160,7 +169,7 @@ dep_nslookup <- function(query) {
 # The write callback then ends the transfer, on the delivery that stopped it
 # or the first one after a stop elsewhere, by invoking R's `abort` restart.
 # curl evaluates the write callback through R_tryEval(), so the jump ends
-# there, with no condition signalled and no hook run, and curl returns a
+# there, with no condition signaled and no hook run, and curl returns a
 # short write, which libcurl fails as a write error without reading further
 # (design/evidence/2026-09-29-abort-post-stop-reads.txt). curl documents
 # none of this, so a test with a quitting hook checks it. curl evaluates its
@@ -172,7 +181,7 @@ dep_nslookup <- function(query) {
 # R acted on inside it, so it stays pending until curl or the loop checks for
 # it, outside any callback, and propagates, leaving the caller to find the
 # binding spent. However the call ends, an interrupt included, every handle
-# still in the pool is cancelled, which closes its connection.
+# still in the pool is canceled, which closes its connection.
 #
 # Returns a list: `aborted` (TRUE when a callback ended the transfer),
 # `failed` (the labels of the callbacks that raised an error, in the order
@@ -189,12 +198,69 @@ dep_curl_transfer <- function(opts, on_body, debug, progress) {
     },
     add = TRUE
   )
+  outcome <- dep_curl_transfer_outcome()
+  handle <- curl::new_handle()
+  received <- function() curl::handle_data(handle)$headers
+  callbacks <- dep_curl_transfer_callbacks(
+    outcome,
+    on_body,
+    debug,
+    progress,
+    received
+  )
+  curl::handle_setopt(handle, .list = opts)
+  curl::handle_setopt(
+    handle,
+    verbose = TRUE,
+    debugfunction = callbacks$trace,
+    noprogress = 0L,
+    xferinfofunction = callbacks$watch
+  )
+  curl::multi_add(
+    handle,
+    fail = function(msg) outcome$fail <- msg,
+    data = callbacks$deliver,
+    pool = pool
+  )
+  # One round of libcurl per multi_run(timeout = 0), then a check, so a stop
+  # takes effect before libcurl reads again.
+  nap <- 0.001
+  repeat {
+    events <- outcome$events
+    curl::multi_run(timeout = 0, pool = pool)
+    if (outcome$stopped) {
+      curl::multi_cancel(handle)
+      break
+    }
+    if (!length(curl::multi_list(pool))) {
+      break
+    }
+    nap <- dep_curl_transfer_pause(pool, nap, outcome$events == events)
+  }
+  dep_curl_transfer_result(outcome, curl::handle_data(handle))
+}
+
+# A transfer's shared state before its first round, which its callbacks and
+# loop record into: no stop, no failed callback, no event yet. curl's `fail`
+# callback adds `fail`, the error of a failed transfer.
+dep_curl_transfer_outcome <- function() {
   outcome <- new.env(parent = emptyenv())
   outcome$stopped <- FALSE
   outcome$failed <- NULL
   outcome$events <- 0L
-  handle <- curl::new_handle()
-  received <- function() curl::handle_data(handle)$headers
+  outcome
+}
+
+# The three callbacks of one transfer, as a list: `watch` (progress),
+# `deliver` (body bytes) and `trace` (debug). Each records into `outcome`,
+# the transfer's shared state, and decides whether the transfer goes on.
+dep_curl_transfer_callbacks <- function(
+  outcome,
+  on_body,
+  debug,
+  progress,
+  received
+) {
   # Whether `answer()` is TRUE; an error is caught and recorded as a failure
   # of callback `name`, and never reaches curl.
   answers_true <- function(name, answer) {
@@ -212,7 +278,41 @@ dep_curl_transfer <- function(opts, on_body, debug, progress) {
     }
     TRUE
   }
-  deliver <- function(x, final = FALSE) {
+  deliver <- dep_curl_transfer_callbacks_deliver(
+    outcome,
+    on_body,
+    received,
+    answers_true
+  )
+  # The trace is the pin's only evidence (R/fetch.R), so a `debug` that
+  # fails stops the transfer as well.
+  trace <- function(type, msg) {
+    suspendInterrupts({
+      outcome$events <- outcome$events + 1L
+      traced <- answers_true("debug", function() {
+        debug(type, msg)
+        TRUE
+      })
+      if (!traced) {
+        outcome$stopped <- TRUE
+      }
+    })
+    NULL
+  }
+  list(watch = watch, deliver = deliver, trace = trace)
+}
+
+# The write callback of dep_curl_transfer_callbacks(), which hands each
+# delivery to `on_body` through `answers_true` and ends a stopped transfer.
+# Its `abort` restart is looked up when curl calls it, so the jump still
+# ends at curl's R_tryEval() (see dep_curl_transfer()).
+dep_curl_transfer_callbacks_deliver <- function(
+  outcome,
+  on_body,
+  received,
+  answers_true
+) {
+  function(x, final = FALSE) {
     # curl's final delivery carries no bytes and is not a write callback;
     # curl makes one after an abort as well, and it is never aborted.
     if (final) {
@@ -235,58 +335,25 @@ dep_curl_transfer <- function(opts, on_body, debug, progress) {
     }
     invisible()
   }
-  # The trace is the pin's only evidence (R/fetch.R), so a `debug` that
-  # fails stops the transfer as well.
-  trace <- function(type, msg) {
-    suspendInterrupts({
-      outcome$events <- outcome$events + 1L
-      traced <- answers_true("debug", function() {
-        debug(type, msg)
-        TRUE
-      })
-      if (!traced) {
-        outcome$stopped <- TRUE
-      }
-    })
-    NULL
+}
+
+# How long the transfer loop waits before its next round, and the wait
+# itself; returns the nap for the next round. curl's own wait returns only on
+# a whole second, so the loop waits itself, only when libcurl has nothing to
+# do at once: 1 ms after a round that traced or delivered anything (`idle`
+# FALSE), doubling while idle, up to 8 ms.
+dep_curl_transfer_pause <- function(pool, nap, idle) {
+  nap <- if (idle) min(2 * nap, 0.008) else 0.001
+  due <- curl::multi_fdset(pool)$timeout
+  if (due != 0) {
+    Sys.sleep(if (due < 0) nap else min(due / 1000, nap))
   }
-  curl::handle_setopt(handle, .list = opts)
-  curl::handle_setopt(
-    handle,
-    verbose = TRUE,
-    debugfunction = trace,
-    noprogress = 0L,
-    xferinfofunction = watch
-  )
-  curl::multi_add(
-    handle,
-    fail = function(msg) outcome$fail <- msg,
-    data = deliver,
-    pool = pool
-  )
-  # One round of libcurl per multi_run(timeout = 0), then a check, so a stop
-  # takes effect before libcurl reads again. curl's own wait returns only on
-  # a whole second, so the loop waits itself, only when libcurl has nothing
-  # to do at once: 1 ms after a round that traced or delivered anything,
-  # doubling while idle, up to 8 ms.
-  nap <- 0.001
-  repeat {
-    events <- outcome$events
-    curl::multi_run(timeout = 0, pool = pool)
-    if (outcome$stopped) {
-      curl::multi_cancel(handle)
-      break
-    }
-    if (!length(curl::multi_list(pool))) {
-      break
-    }
-    nap <- if (outcome$events == events) min(2 * nap, 0.008) else 0.001
-    due <- curl::multi_fdset(pool)$timeout
-    if (due != 0) {
-      Sys.sleep(if (due < 0) nap else min(due / 1000, nap))
-    }
-  }
-  info <- curl::handle_data(handle)
+  nap
+}
+
+# The wrapper's answer from the transfer's recorded `outcome` and the handle's
+# final `info` (curl::handle_data()).
+dep_curl_transfer_result <- function(outcome, info) {
   list(
     aborted = outcome$stopped,
     failed = outcome$failed,
@@ -354,18 +421,26 @@ read_diagnostics <- function(url) {
 }
 
 read_curl_parse <- function(url) {
-  p <- dep_call(dep_curl_parse, url, valid = function(p) {
-    is.list(p) &&
-      is_string(p$scheme) &&
-      is_optional_string(p$host) &&
-      is_optional_string(p$port) &&
-      is_optional_string(p$user) &&
-      is_optional_string(p$password)
-  })
+  p <- dep_call(dep_curl_parse, url, valid = read_curl_parse_valid)
   if (is.null(p)) {
     return(NULL)
   }
   p[c("scheme", "host", "port", "user", "password")]
+}
+
+# Whether curl_parse_url() answered in the shape ssrfr reads: a list with a
+# scheme string, and NULL or a string for each optional component.
+read_curl_parse_valid <- function(p) {
+  is.list(p) && is_string(p$scheme) && read_curl_parse_valid_optional(p)
+}
+
+# Whether each optional component of the list `p` (host, port, user,
+# password) is NULL or a string.
+read_curl_parse_valid_optional <- function(p) {
+  is_optional_string(p$host) &&
+    is_optional_string(p$port) &&
+    is_optional_string(p$user) &&
+    is_optional_string(p$password)
 }
 
 # The resolver's answer set for one query: a character vector, possibly
@@ -444,33 +519,13 @@ read_family <- function(x) {
 # raddr_embedding is a record whose fields are kind, role, address and
 # category.
 read_embeddings <- function(x) {
-  e <- dep_call(dep_raddr_embeddings, x, valid = function(e) {
-    is.list(e) && length(e) == 1L && inherits(e[[1L]], "raddr_embedding")
-  })
+  e <- dep_call(dep_raddr_embeddings, x, valid = read_embeddings_valid)
   if (is.null(e)) {
     return(NULL)
   }
   rows <- e[[1L]]
   n <- length(rows)
-  fields <- tryCatch(
-    {
-      f <- unclass(rows)
-      shaped <- is.list(f) &&
-        all(c("kind", "role", "address") %in% names(f)) &&
-        length(f$kind) == n &&
-        length(f$role) == n &&
-        length(f$address) == n &&
-        !anyNA(f$kind)
-      if (shaped) {
-        list(
-          kind = as.character(f$kind),
-          role = as.character(f$role),
-          address = if (n) format(f$address) else character()
-        )
-      }
-    },
-    error = function(e) NULL
-  )
+  fields <- tryCatch(read_embeddings_fields(rows, n), error = function(e) NULL)
   if (is.null(fields) || anyNA(fields$address)) {
     return(NULL)
   }
@@ -486,9 +541,43 @@ read_embeddings <- function(x) {
   )
 }
 
+# Whether addr_embeddings() answered with one raddr_embedding record.
+read_embeddings_valid <- function(e) {
+  is.list(e) && length(e) == 1L && inherits(e[[1L]], "raddr_embedding")
+}
+
+# The kind, role and address (as text) columns of the `n` embedding `rows`,
+# or NULL when the record lacks a field, a field has the wrong length, or a
+# kind is NA. The caller catches an error.
+read_embeddings_fields <- function(rows, n) {
+  f <- unclass(rows)
+  if (read_embeddings_shaped(f, n)) {
+    list(
+      kind = as.character(f$kind),
+      role = as.character(f$role),
+      address = if (n) format(f$address) else character()
+    )
+  }
+}
+
+# Whether the unclassed record `f` has kind, role and address fields of
+# length `n`, and no NA kind.
+read_embeddings_shaped <- function(f, n) {
+  is.list(f) &&
+    all(c("kind", "role", "address") %in% names(f)) &&
+    read_embeddings_lengths(f, n) &&
+    !anyNA(f$kind)
+}
+
+# Whether the kind, role and address fields of the record `f` each have
+# length `n`.
+read_embeddings_lengths <- function(f, n) {
+  length(f$kind) == n && length(f$role) == n && length(f$address) == n
+}
+
 # One transfer through dep_curl_transfer(), or NULL when the wrapper fails or
 # answers in the wrong shape. An interrupt is not an error: it propagates, and
-# the wrapper has already cancelled the transfer.
+# the wrapper has already canceled the transfer.
 read_transfer <- function(opts, on_body, debug, progress) {
   dep_call(
     dep_curl_transfer,
@@ -496,22 +585,40 @@ read_transfer <- function(opts, on_body, debug, progress) {
     on_body,
     debug,
     progress,
-    valid = function(t) {
-      is.list(t) &&
-        is.logical(t$aborted) &&
-        length(t$aborted) == 1L &&
-        !is.na(t$aborted) &&
-        (is.null(t$failed) || is.character(t$failed) && !anyNA(t$failed)) &&
-        (is.null(t$error) || is_string(t$error)) &&
-        is.numeric(t$status) &&
-        length(t$status) == 1L &&
-        !is.na(t$status) &&
-        is.raw(t$headers) &&
-        is.numeric(t$connect) &&
-        length(t$connect) == 1L &&
-        !is.na(t$connect)
-    }
+    valid = read_transfer_valid
   )
+}
+
+# Whether dep_curl_transfer() answered in the shape read_transfer() promises:
+# a list whose ending fields, then whose response fields, are well formed.
+read_transfer_valid <- function(t) {
+  is.list(t) && read_transfer_valid_ending(t) && read_transfer_valid_response(t)
+}
+
+# Whether the fields saying how the transfer ended are well formed: `aborted`
+# a flag, `failed` NULL or callback labels, `error` NULL or a curl class.
+read_transfer_valid_ending <- function(t) {
+  read_transfer_is_flag(t$aborted) &&
+    (is.null(t$failed) || is.character(t$failed) && !anyNA(t$failed)) &&
+    (is.null(t$error) || is_string(t$error))
+}
+
+# Whether the fields read from the response are well formed: `status` and
+# `connect` single numbers, `headers` raw bytes.
+read_transfer_valid_response <- function(t) {
+  read_transfer_is_number(t$status) &&
+    is.raw(t$headers) &&
+    read_transfer_is_number(t$connect)
+}
+
+# Whether `x` is a single, non-NA logical.
+read_transfer_is_flag <- function(x) {
+  is.logical(x) && length(x) == 1L && !is.na(x)
+}
+
+# Whether `x` is a single, non-NA number.
+read_transfer_is_number <- function(x) {
+  is.numeric(x) && length(x) == 1L && !is.na(x)
 }
 
 # What the option builder needs to know about libcurl: its version, whether

@@ -60,14 +60,15 @@ never_set_options <- c(
 # libcurl 7.85 added the string forms of the protocol restriction. Below it,
 # or where R's curl does not list them, the bitmasks restrict to the same two
 # schemes: CURLPROTO_HTTP (1) and CURLPROTO_HTTPS (2) (r-binding.md §5,
-# "Minimum libcurl").
-protocols_str_since <- numeric_version("7.85.0")
+# "Minimum libcurl"). A string, not a numeric_version: cyclocomp walks a
+# top-level numeric_version without end (gaborcsardi/cyclocomp#33).
+protocols_str_since <- "7.85.0"
 curlproto_http_https <- 3L
 
 protocol_options <- function(capabilities) {
   modern <- !is.null(capabilities) &&
     isTRUE(capabilities$protocols_str) &&
-    capabilities$version >= protocols_str_since
+    capabilities$version >= numeric_version(protocols_str_since)
   if (modern) {
     list(protocols_str = "http,https", redir_protocols_str = "http,https")
   } else {
@@ -114,7 +115,19 @@ as_timeout_ms <- function(seconds) {
 # The request plan as libcurl options (§2.3): the method, the body and the
 # caller's header fields. The User-Agent is the policy's (§5.3).
 request_options <- function(request, policy) {
-  headers <- request$headers
+  body <- request$body
+  method <- request$method
+  lines <- request_options_header_lines(request$headers, body, method)
+  opts <- list(useragent = policy$user_agent)
+  if (length(lines)) {
+    opts$httpheader <- lines
+  }
+  request_options_method(opts, body, method)
+}
+
+# The header lines the request is sent with: the plan's fields, then the
+# suppression of each field libcurl would add on its own.
+request_options_header_lines <- function(headers, body, method) {
   lines <- if (length(headers)) {
     ifelse(
       nzchar(headers),
@@ -124,8 +137,6 @@ request_options <- function(request, policy) {
   } else {
     character()
   }
-  body <- request$body
-  method <- request$method
   # A field libcurl adds on its own is suppressed, an empty "Name:" line,
   # unless the plan carries it (§2.3): Accept (*/*) on every request, and
   # Content-Type (application/x-www-form-urlencoded) on every POST and on
@@ -144,10 +155,11 @@ request_options <- function(request, policy) {
   if (!is.null(body)) {
     lines <- c(lines, "Expect:")
   }
-  opts <- list(useragent = policy$user_agent)
-  if (length(lines)) {
-    opts$httpheader <- lines
-  }
+  lines
+}
+
+# `opts` with the options that send the method and the body.
+request_options_method <- function(opts, body, method) {
   if (!is.null(body)) {
     opts$postfields <- body
     opts$postfieldsize_large <- length(body)
@@ -214,21 +226,29 @@ pin_check <- function(lines, address, port) {
     return("garbled")
   }
   for (line in trying) {
-    dialed <- sub("^Trying ", "", sub("[.]{3}$", "", line))
-    shape <- "^(\\[[0-9A-Fa-f:.]+\\]|[0-9A-Fa-f:.]+):([0-9]{1,5})$"
-    if (!grepl(shape, dialed)) {
-      return("garbled")
+    verdict <- pin_check_line(line, want, port)
+    if (verdict != "match") {
+      return(verdict)
     }
-    host <- unbracket(sub(shape, "\\1", dialed))
-    got <- canonical_address(host)
-    if (!is_string(got)) {
-      return("garbled")
-    }
-    if (
-      !identical(got, want) || as.integer(sub(shape, "\\2", dialed)) != port
-    ) {
-      return("other-address")
-    }
+  }
+  "match"
+}
+
+# Whether one `Trying` line names `want` (canonical text) and `port`:
+# "match", "garbled" or "other-address", as pin_check() reads them.
+pin_check_line <- function(line, want, port) {
+  dialed <- sub("^Trying ", "", sub("[.]{3}$", "", line))
+  shape <- "^(\\[[0-9A-Fa-f:.]+\\]|[0-9A-Fa-f:.]+):([0-9]{1,5})$"
+  if (!grepl(shape, dialed)) {
+    return("garbled")
+  }
+  host <- unbracket(sub(shape, "\\1", dialed))
+  got <- canonical_address(host)
+  if (!is_string(got)) {
+    return("garbled")
+  }
+  if (!identical(got, want) || as.integer(sub(shape, "\\2", dialed)) != port) {
+    return("other-address")
   }
   "match"
 }
@@ -343,10 +363,7 @@ classify_lines <- function(state, lines, from, to) {
   }
   span <- lines[from:to]
   n <- length(span)
-  skip <- from - 1L
   empties <- which(!nzchar(span))
-  # The first empty line at or after line i, for i in 1..n+1, or NA.
-  next_empty <- empties[findInterval(seq_len(n + 1L) - 1L, empties) + 1L]
   opens <- grepl(status_line, span, useBytes = TRUE)
   codes <- rep(NA_integer_, n)
   codes[opens] <- as.integer(sub(
@@ -355,13 +372,33 @@ classify_lines <- function(state, lines, from, to) {
     span[opens],
     useBytes = TRUE
   ))
-  blocks <- state$blocks
-  more <- sum(opens)
-  start <- c(blocks$start, integer(more))
-  end <- c(blocks$end, integer(more))
-  status <- c(blocks$status, integer(more))
-  complete <- c(blocks$complete, logical(more))
-  count <- length(blocks$start)
+  scan <- list(
+    n = n,
+    skip = from - 1L,
+    to = to,
+    # The first empty line at or after line i, for i in 1..n+1, or NA.
+    next_empty = empties[findInterval(seq_len(n + 1L) - 1L, empties) + 1L],
+    opens = opens,
+    codes = codes
+  )
+  classify_lines_walk(state, scan)
+}
+
+# classify_lines()'s walk over `scan`, the lines from its `from` through
+# `to`, read once: `n` lines after the `skip` before them, the status-line
+# `opens` with their `codes`, and each line's `next_empty`. Each block opens
+# at a status line in mode "start", and ends at the next empty line, or
+# runs on, not yet ended, through `to`; an ended final block turns the rest
+# into trailer lines. Returns the state classify_lines() does.
+classify_lines_walk <- function(state, scan) {
+  n <- scan$n
+  skip <- scan$skip
+  to <- scan$to
+  next_empty <- scan$next_empty
+  opens <- scan$opens
+  codes <- scan$codes
+  blocks <- classify_lines_walk_grow(state$blocks, sum(opens))
+  count <- length(state$blocks$start)
   trailers <- state$trailers
   mode <- state$mode
   at <- 1L
@@ -369,8 +406,8 @@ classify_lines <- function(state, lines, from, to) {
     if (mode == "start" && opens[[at]]) {
       mode <- "block"
       count <- count + 1L
-      start[[count]] <- at + skip
-      status[[count]] <- codes[[at]]
+      blocks$start[[count]] <- at + skip
+      blocks$status[[count]] <- codes[[at]]
       # The block's end is looked up from the line after its status line.
       at <- at + 1L
     } else if (mode == "start") {
@@ -379,14 +416,14 @@ classify_lines <- function(state, lines, from, to) {
     ended <- next_empty[[at]]
     if (is.na(ended)) {
       if (mode == "block") {
-        end[[count]] <- to
+        blocks$end[[count]] <- to
       }
       break
     }
     if (mode == "block") {
-      end[[count]] <- ended + skip
-      complete[[count]] <- TRUE
-      if (status[[count]] >= 200L) {
+      blocks$end[[count]] <- ended + skip
+      blocks$complete[[count]] <- TRUE
+      if (blocks$status[[count]] >= 200L) {
         trailers <- c(trailers, seq_len(n - ended) + ended + skip)
         mode <- "trailer"
         break
@@ -398,13 +435,19 @@ classify_lines <- function(state, lines, from, to) {
   kept <- seq_len(count)
   list(
     mode = mode,
-    blocks = list(
-      start = start[kept],
-      end = end[kept],
-      status = status[kept],
-      complete = complete[kept]
-    ),
+    blocks = lapply(blocks, `[`, kept),
     trailers = trailers
+  )
+}
+
+# `blocks`, header_segments()'s blocks, each vector grown by `more` unset
+# entries: the room classify_lines_walk() fills, one per status line.
+classify_lines_walk_grow <- function(blocks, more) {
+  list(
+    start = c(blocks$start, integer(more)),
+    end = c(blocks$end, integer(more)),
+    status = c(blocks$status, integer(more)),
+    complete = c(blocks$complete, logical(more))
   )
 }
 
@@ -440,6 +483,17 @@ parse_response_headers <- function(raw, segments = NULL) {
   }
   first <- blocks$start[[final]] + 1L
   lines <- segments$lines[seq_len(blocks$end[[final]] - first) + first - 1L]
+  headers <- parse_response_headers_fields(lines)
+  if (is.null(headers)) {
+    return(NULL)
+  }
+  list(status = blocks$status[[final]], headers = headers)
+}
+
+# The field lines of a header block as parse_response_headers() returns
+# them, values named by lowercase field name and marked by encoding, or
+# NULL when a line is not a field line or an obsolete folding of one.
+parse_response_headers_fields <- function(lines) {
   field_line <- paste0("^", http_tchars, ":")
   fields <- character()
   values <- character()
@@ -458,10 +512,7 @@ parse_response_headers <- function(raw, segments = NULL) {
   valid <- validUTF8(values)
   Encoding(values[valid]) <- "UTF-8"
   Encoding(values[!valid]) <- "bytes"
-  list(
-    status = blocks$status[[final]],
-    headers = stats::setNames(values, fields)
-  )
+  stats::setNames(values, fields)
 }
 
 # A field value without its leading and trailing whitespace (RFC 9110 §5.5,

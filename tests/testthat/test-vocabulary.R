@@ -85,6 +85,14 @@ vocabulary_pins <- list(
       "metadata.tencentyun.com",
       "api.metadata.cloud.ibm.com",
       "metadata.exoscale.com"
+    ),
+    "2" = c(
+      "metadata.google.internal",
+      "metadata.goog",
+      "metadata.tencentyun.com",
+      "api.metadata.cloud.ibm.com",
+      "metadata.exoscale.com",
+      "metadata"
     )
   ),
   metadata_headers = list(

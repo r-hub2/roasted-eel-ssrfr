@@ -19,7 +19,7 @@ V0017	ipv4-literal	http://169.254.0.1/	-	default	first	refuse	link-local	L0	acti
 V0018	ipv4-literal	http://169.254.255.255/	-	default	first	refuse	link-local	L0	active	RFC 3927	top of 169.254/16
 V0019	ipv4-literal	http://169.253.255.255/	-	default	first	admit	-	L0	active	RFC 3927	just below 169.254/16
 V0020	ipv4-literal	http://169.255.0.0/	-	default	first	admit	-	L0	active	RFC 3927	just above 169.254/16
-V0021	ipv4-literal	http://169.254.169.253/	-	default	first	refuse	link-local	L0	active	RFC 3927	IMDS neighbour is link-local, not a table row
+V0021	ipv4-literal	http://169.254.169.253/	-	default	first	refuse	link-local	L0	active	RFC 3927	IMDS neighbor is link-local, not a table row
 V0022	ipv4-literal	http://100.64.0.0/	-	default	first	refuse	shared	L0	active	RFC 6598	bottom of CGNAT
 V0023	ipv4-literal	http://100.127.255.255/	-	default	first	refuse	shared	L0	active	RFC 6598	top of CGNAT
 V0024	ipv4-literal	http://100.63.255.255/	-	default	first	admit	-	L0	active	RFC 6598	just below CGNAT
@@ -52,7 +52,7 @@ V0050	ipv4-literal	http://192.0.0.9/	-	default	first	admit	-	L0	active	RFC 7723 
 V0051	ipv4-literal	http://192.88.99.1/	-	default	first	refuse	reserved	L0	active	RFC 7526 ; ssrfr-v1.md §5.1	deprecated 6to4 relay anycast, reachability NA (tier 1)
 V0052	ipv4-literal	http://169.254.0.0/	-	default	first	refuse	link-local	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R	bottom of 169.254.0.0/16
 V0053	ipv4-literal	http://169.254.169.254/	-	default	first	refuse	cloud-metadata	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R	metadata address; gate 2 code beats link-local
-V0054	ipv4-literal	http://169.254.169.255/	-	default	first	refuse	link-local	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R	neighbour above the metadata address
+V0054	ipv4-literal	http://169.254.169.255/	-	default	first	refuse	link-local	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R	neighbor above the metadata address
 V0055	ipv4-literal	http://93.184.216.34/	-	default	first	admit	-	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R	ordinary public address
 V0056	ipv4-literal	http://240.0.0.1/	-	default	first	refuse	reserved	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R	class E future use (inherited known gap)
 V0057	ipv4-literal	http://198.18.0.1/	-	default	first	refuse	reserved	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R	benchmarking 198.18.0.0/15 (inherited known gap)
@@ -134,8 +134,8 @@ V0132	ipv6-spelling	http://[fd00:0ec2:0:0:0:0:0:0254]/	-	default	first	refuse	cl
 V0133	ipv6-spelling	http://[FD00:0EC2::254]/	-	default	first	refuse	cloud-metadata	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R ; ssrfr-v1.md INV-3 ; ssrfr-v1.md §5	a spelling of AWS IMDS fd00:ec2::254; gate 2 by value
 V0134	ipv6-spelling	http://[fd00:0ec2:ffff::1]/	-	default	first	refuse	private	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R ; ssrfr-v1.md INV-3	inside fd00:ec2::/32 but not a gate 2 entry; ULA
 V0135	ipv6-spelling	http://[fd00:ec2:1::5]/	-	default	first	refuse	private	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R ; ssrfr-v1.md INV-3	inside fd00:ec2::/32 but not a gate 2 entry; ULA
-V0136	ipv6-spelling	http://[fd00:ec3::254]/	-	default	first	refuse	private	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R ; ssrfr-v1.md INV-3	neighbour of the AWS prefix; ULA
-V0137	ipv6-spelling	http://[fd01:ec2::254]/	-	default	first	refuse	private	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R ; ssrfr-v1.md INV-3	neighbour of the AWS prefix; ULA
+V0136	ipv6-spelling	http://[fd00:ec3::254]/	-	default	first	refuse	private	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R ; ssrfr-v1.md INV-3	neighbor of the AWS prefix; ULA
+V0137	ipv6-spelling	http://[fd01:ec2::254]/	-	default	first	refuse	private	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R ; ssrfr-v1.md INV-3	neighbor of the AWS prefix; ULA
 V0138	ipv6-spelling	http://[fc00::1]/	-	default	first	refuse	private	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R ; ssrfr-v1.md INV-3	unique-local fc00::/7 (inherited known gap)
 V0139	ipv6-spelling	http://[1:2:3]/	-	default	first	refuse	parse	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R ; ssrfr-v1.md INV-11	malformed IPv6 literal fails the WHATWG parse; inherited expected admit
 V0140	ipv6-spelling	http://[::ffff::1]/	-	default	first	refuse	parse	L0	active	robotstxtr R/ssrf.R ; sitemapr R/ssrf.R ; ssrfr-v1.md INV-11	malformed IPv6 literal fails the WHATWG parse; inherited expected admit
@@ -225,8 +225,8 @@ V0223	embedding	http://[2600:1f00:64::a9fe:a9fe]/	-	default	first	admit	-	L0	act
 V0224	provider-endpoint	http://169.254.169.254/latest/meta-data/	-	default	first	refuse	cloud-metadata	L0	active	https://blog.appsecco.com/an-ssrf-privileged-aws-keys-and-the-capital-one-breach-4c3c2cded3af ; ssrfr-v1.md §5	AWS IMDS literal
 V0225	provider-endpoint	http://169.254.169.254:80/	-	default	first	refuse	cloud-metadata	L0	active	ssrfr-v1.md §5	IMDS with explicit port 80
 V0226	provider-endpoint	http://168.63.129.16/	-	default	first	refuse	cloud-metadata	L0	active	ssrfr-v1.md §5	Azure WireServer is public space; only gate 2 refuses it
-V0227	provider-endpoint	http://168.63.129.15/	-	default	first	admit	-	L0	active	ssrfr-v1.md §5	WireServer neighbour below is public
-V0228	provider-endpoint	http://168.63.129.17/	-	default	first	admit	-	L0	active	ssrfr-v1.md §5	WireServer neighbour above is public
+V0227	provider-endpoint	http://168.63.129.15/	-	default	first	admit	-	L0	active	ssrfr-v1.md §5	WireServer neighbor below is public
+V0228	provider-endpoint	http://168.63.129.17/	-	default	first	admit	-	L0	active	ssrfr-v1.md §5	WireServer neighbor above is public
 V0229	provider-endpoint	http://192.0.0.192/	-	default	first	refuse	cloud-metadata	L0	active	ssrfr-v1.md §5 ; RFC 6890	Oracle endpoint missed by ipaddress::is_global
 V0230	provider-endpoint	http://100.100.100.200/	-	default	first	refuse	cloud-metadata	L0	active	ssrfr-v1.md §5 ; RFC 6598	Alibaba endpoint inside CGNAT; gate 2 names it
 V0231	provider-endpoint	http://[fd00:ec2::254]/	-	default	first	refuse	cloud-metadata	L0	active	ssrfr-v1.md §5 ; ssrfr-v1.md §13 INV-3	AWS IMDS IPv6
@@ -250,13 +250,13 @@ V0248	metadata-hostname	http://metadata.google.internal./	-	default	first	refuse
 V0249	metadata-hostname	http://METADATA.GOOGLE.INTERNAL/	-	default	first	refuse	cloud-metadata	L0	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	ASCII case folded
 V0250	metadata-hostname	http://metadata.google.internal%2E/	-	default	first	refuse	cloud-metadata	L0	active	https://url.spec.whatwg.org/ ; ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	percent-encoded trailing dot decodes before matching
 V0251	metadata-hostname	http://metadata%2Egoogle%2Einternal/	-	default	first	refuse	cloud-metadata	L0	active	https://url.spec.whatwg.org/ ; ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	percent-encoded dots decode before matching
-V0252	metadata-hostname	http://metadata.google.internal../	169.254.169.254	default	first	refuse	cloud-metadata	L1	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	two trailing dots: only one is stripped, so the answer decides
+V0252	metadata-hostname	http://metadata.google.internal../	169.254.169.254	default	first	refuse	cloud-metadata	L1	superseded:a host with an empty label refuses as parse at L0 since 2026-11-02 (SSRF-qopriinc), before any answer is read; V0553 replaces it	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	two trailing dots: only one is stripped, so the answer decides
 V0253	metadata-hostname	http://metadata.goog/	-	default	first	refuse	cloud-metadata	L0	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	GCP short metadata hostname
 V0254	metadata-hostname	https://api.metadata.cloud.ibm.com/	-	default	first	refuse	cloud-metadata	L0	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	IBM Cloud metadata hostname over HTTPS
 V0255	metadata-hostname	http://metadata.google.internal.evil.example/	93.184.216.34	default	first	admit	-	L1	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	metadata name as a prefix label is not an exact match
 V0256	metadata-hostname	http://evil.metadata.google.internal/	93.184.216.34	default	first	admit	-	L1	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	built-in list is exact names only, no subdomains
-V0257	metadata-hostname	http://metadata/	169.254.169.254	default	first	refuse	cloud-metadata	L1	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	declined bare name refuses only by its answer
-V0258	metadata-hostname	http://metadata/	93.184.216.34	default	first	admit	-	L1	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	declined bare name with a public answer admits
+V0257	metadata-hostname	http://metadata/	169.254.169.254	default	first	refuse	cloud-metadata	L1	superseded:bare metadata is on gate 5's list since metadata_hostnames version 2 (SSRF-figjvukt), so it refuses by name at L0 before any answer is read; V0547 replaces it	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	declined bare name refuses only by its answer
+V0258	metadata-hostname	http://metadata/	93.184.216.34	default	first	admit	-	L1	superseded:bare metadata is on gate 5's list since metadata_hostnames version 2 (SSRF-figjvukt), so a public answer no longer admits it; V0547 replaces it	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	declined bare name with a public answer admits
 V0259	metadata-hostname	http://instance-data/	169.254.169.254	default	first	refuse	cloud-metadata	L1	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	declined name refuses by its answer
 V0260	metadata-hostname	http://metadata.azure.internal/	168.63.129.16	default	first	refuse	cloud-metadata	L1	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	declined Azure name refuses by its WireServer answer
 V0261	metadata-hostname	http://metadata.google.internal/	169.254.169.254	allow_hosts=metadata.google.internal	first	refuse	cloud-metadata	L1	active	ssrfr-v1.md §5.0	allow_hosts lifts the name rule, the answer still refuses
@@ -283,7 +283,7 @@ V0281	metadata-hostname	http://svc.internal/	93.184.216.34	default	first	admit	-
 V0282	metadata-hostname	http://metadata.mycorp.example/	93.184.216.34	default	first	admit	-	L1	active	ssrfr-v1.md §5	metadata-looking name outside the exact list
 V0283	metadata-hostname	http://metadata.google.internal.attacker.example/	93.184.216.34	default	first	admit	-	L1	active	GHSA-gf3v-fwqg-4vh7 ; ssrfr-v1.md §5.0	exact whole-host match, not prefix
 V0284	metadata-hostname	http://evil-metadata.google.internal/	93.184.216.34	default	first	admit	-	L1	active	ssrfr-v1.md §5	built-in list is exact names only, no suffix match
-V0285	metadata-hostname	http://metadata/	empty	default	first	fail	unresolvable	L1	active	ssrfr-v1.md §5.0 ; https://github.com/getsentry/sentry/blob/master/src/sentry/net/socket.py	bare name resolves as absolute, so no search suffix applies
+V0285	metadata-hostname	http://metadata/	empty	default	first	fail	unresolvable	L1	superseded:bare metadata is on gate 5's list since metadata_hostnames version 2 (SSRF-figjvukt), so it refuses by name before resolution; V0547 replaces the name row, V0550 keeps the empty-answer row	ssrfr-v1.md §5.0 ; https://github.com/getsentry/sentry/blob/master/src/sentry/net/socket.py	bare name resolves as absolute, so no search suffix applies
 V0286	parser-confusion	http://legit.example%40127.0.0.1/	-	default	first	refuse	parse	L0	active	https://blackhat.com/docs/us-17/thursday/us-17-Tsai-A-New-Era-Of-SSRF-Exploiting-URL-Parser-In-Trending-Programming-Languages.pdf ; https://url.spec.whatwg.org/	percent-encoded @ decodes to a forbidden host code point
 V0287	parser-confusion	http://127.0.0.1#legit.example	-	default	first	refuse	loopback	L0	active	https://blackhat.com/docs/us-17/thursday/us-17-Tsai-A-New-Era-Of-SSRF-Exploiting-URL-Parser-In-Trending-Programming-Languages.pdf ; https://github.com/swisskyrepo/PayloadsAllTheThings/blob/master/Server%20Side%20Request%20Forgery/README.md	allowlisted name hidden in fragment; host is loopback
 V0288	parser-confusion	http://127.0.0.1#@legit.example	-	default	first	refuse	loopback	L0	active	https://blackhat.com/docs/us-17/thursday/us-17-Tsai-A-New-Era-Of-SSRF-Exploiting-URL-Parser-In-Trending-Programming-Languages.pdf	fragment ends the authority before the @
@@ -348,7 +348,7 @@ V0346	idn	http://ⓛⓞⓒⓐⓛⓗⓞⓢⓣ/	127.0.0.1,::1	default	first	refuse
 V0347	idn	http://metadata。google。internal/	-	default	first	refuse	cloud-metadata	L0	active	https://unicode.org/reports/tr46/ ; ssrfr-v1.md §5.0	Unicode dots fold before the metadata hostname match
 V0348	idn	http://metadata.google.internal\u{200B}/	-	default	first	refuse	cloud-metadata	L0	active	https://unicode.org/reports/tr46/ ; ssrfr-v1.md §5.0	zero-width space is ignored by UTS-46 mapping
 V0349	idn	http://metadata.goo\u{00AD}gle.internal/	-	default	first	refuse	cloud-metadata	L0	active	https://unicode.org/reports/tr46/ ; ssrfr-v1.md §5.0	soft hyphen is ignored by UTS-46 mapping
-V0350	idn	http://xn--a.example/	-	default	first	refuse	parse	L0	pending:RURL-vicyvlvh	ssrfr-v1.md §5.0	xn-- label that does not decode has no A-label
+V0350	idn	http://xn--a.example/	-	default	first	refuse	parse	L0	active	ssrfr-v1.md §5.0	xn-- label that does not decode has no A-label
 V0351	idn	http://BÜCHER.example/	-	deny_hosts=bücher.example	first	refuse	host-denied	L0	active	ssrfr-v1.md §5.0	U-label host matches an A-label-normalized deny rule
 V0352	idn	http://exаmple.test/	93.184.216.34	deny_hosts=example.test	first	admit	-	L1	active	https://hacktricks.wiki/en/pentesting-web/unicode-injection/unicode-normalization.html ; ssrfr-v1.md §5.0	Cyrillic homograph is a different A-label; exact deny rule does not match
 V0353	idn	http://bücher.example/	93.184.216.34	default	first	admit	-	L1	active	ssrfr-v1.md §4.1	ordinary IDN with a public answer admits
@@ -537,3 +537,23 @@ V0535	operational	http://nx.example/	empty	default	first	fail	unresolvable	L1	ac
 V0536	operational	http://nx.example/	error	default	first	fail	unresolvable	L1	active	ssrfr-v1.md §6.6 ; ssrfr-v1.md INV-11	resolver raises an error
 V0537	operational	http://nx.example/	unparseable:not-an-address	default	first	fail	unresolvable	L1	active	ssrfr-v1.md §6.6 ; ssrfr-v1.md INV-11	resolver returns a non-address
 V0538	scheme	file://93.184.216.34:21/	-	default	first	refuse	parse	L0	active	libcurl lib/urlapi.c (curl-8_14_1) ; robotstxtr R/ssrf.R ; sitemapr R/ssrf.R	replaces V0453: rurl layer 2 admits file:, then libcurl refuses a file URL whose host carries a port, on Windows too, so the step-2 parse refuses first
+V0539	ipv6-literal	http://[fd00:ec2::254%25lo0]/	-	default	first	refuse	parse	L0	active	ssrfr-v1.md §4.2 ; RFC 9844	zone ID on a provider endpoint refuses as parse, before gate 2
+V0540	ipv6-literal	http://[fe80::a9fe:a9fe%25eth0]/	-	default	first	refuse	parse	L0	active	ssrfr-v1.md §4.2 ; RFC 9844	zone ID on a link-local provider endpoint, where a zone is meaningful
+V0541	metadata-hostname	http://metadata.google.internal%E3%80%82/	-	default	first	refuse	cloud-metadata	L0	pending:SSRF-shdndpga	WHATWG URL Standard §3.5 host parsing (https://url.spec.whatwg.org/#host-parsing) ; UTS #46 §4 ; ssrfr-v1.md §5.0	percent-encoded ideographic full stop as the trailing dot: WHATWG reads metadata.google.internal.; rurl 3.1.0 fails the parse, a parse refusal until it is fixed
+V0542	metadata-hostname	http://metadata.google.internal%EF%BC%8E/	-	default	first	refuse	cloud-metadata	L0	pending:SSRF-shdndpga	WHATWG URL Standard §3.5 host parsing (https://url.spec.whatwg.org/#host-parsing) ; UTS #46 §4 ; ssrfr-v1.md §5.0	percent-encoded fullwidth full stop as the trailing dot: as V0541
+V0543	metadata-hostname	http://metadata﹒google﹒internal/	-	default	first	refuse	parse	L0	active	WHATWG URL Standard §3.5 host parsing (https://url.spec.whatwg.org/#host-parsing) ; UTS #46 §4	U+FE52 small full stop is no label separator: domain to ASCII fails
+V0544	metadata-hostname	http://metadata.google.internal﹒/	-	default	first	refuse	parse	L0	active	WHATWG URL Standard §3.5 host parsing (https://url.spec.whatwg.org/#host-parsing) ; UTS #46 §4	U+FE52 small full stop as the trailing dot
+V0545	metadata-hostname	http://metadata.google.internal\u{200D}/	-	default	first	refuse	parse	L0	active	UTS #46 §4 ; UTS #46 §4.1	trailing ZWJ fails CheckJoiners; unlike ZWSP (V0348) it is not removed
+V0546	metadata-hostname	http://instance-data.ec2.internal/	169.254.169.254	default	first	refuse	cloud-metadata	L1	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0	name not on the built-in list refuses by its answer
+V0547	metadata-hostname	http://metadata/	-	default	first	refuse	cloud-metadata	L0	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0 ; https://docs.cloud.google.com/compute/docs/troubleshooting/troubleshoot-metadata-server	GCP bare metadata hostname, refused before resolution
+V0548	metadata-hostname	http://METADATA/	-	default	first	refuse	cloud-metadata	L0	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0 ; https://docs.cloud.google.com/compute/docs/troubleshooting/troubleshoot-metadata-server	uppercase bare name; ASCII-lowercased before matching
+V0549	metadata-hostname	http://metadata./	-	default	first	refuse	cloud-metadata	L0	active	ssrfr-v1.md §5 ; ssrfr-v1.md §5.0 ; https://docs.cloud.google.com/compute/docs/troubleshooting/troubleshoot-metadata-server	bare name with a trailing root dot, stripped before matching
+V0550	metadata-hostname	http://intranet/	empty	default	first	fail	unresolvable	L1	active	ssrfr-v1.md §5.0 ; https://github.com/getsentry/sentry/blob/master/src/sentry/net/socket.py	bare single-label name resolves as absolute, so no search suffix applies (was V0285)
+V0551	metadata-hostname	http://metadata%E3%80%82/	-	default	first	refuse	cloud-metadata	L0	pending:SSRF-shdndpga	WHATWG URL Standard §3.5 host parsing (https://url.spec.whatwg.org/#host-parsing) ; UTS #46 §4 ; ssrfr-v1.md §5.0	percent-encoded ideographic full stop after the bare name: WHATWG reads metadata.; as V0541
+V0552	metadata-hostname	http://metadata%EF%BC%8E/	-	default	first	refuse	cloud-metadata	L0	pending:SSRF-shdndpga	WHATWG URL Standard §3.5 host parsing (https://url.spec.whatwg.org/#host-parsing) ; UTS #46 §4 ; ssrfr-v1.md §5.0	percent-encoded fullwidth full stop after the bare name: as V0542
+V0553	metadata-hostname	http://metadata.google.internal../	-	default	first	refuse	parse	L0	active	ssrfr-v1.md §5.0	two trailing dots: an empty label refuses before gate 5, which would miss it (was V0252)
+V0554	policy	http://evil.example../	-	deny_hosts=evil.example	first	refuse	parse	L0	active	ssrfr-v1.md §5.0	two trailing dots: an empty label refuses before gate 4, which would miss it
+V0555	policy	http://evil..example/	-	deny_hosts=evil.example	first	refuse	parse	L0	active	ssrfr-v1.md §5.0	empty inner label refuses as parse, not past gate 4
+V0556	policy	http://.evil.example/	-	deny_hosts=evil.example	first	refuse	parse	L0	active	ssrfr-v1.md §5.0	empty first label refuses as parse, not past gate 4
+V0557	policy	http://evil.example。。/	-	deny_hosts=evil.example	first	refuse	parse	L0	active	ssrfr-v1.md §5.0	two ideographic full stops map to dots and leave an empty label
+V0558	policy	http://evil.example./	-	deny_hosts=evil.example	first	refuse	host-denied	L0	active	ssrfr-v1.md §5.0	a single trailing root dot is no empty label: stripped, and the deny rule matches

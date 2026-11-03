@@ -22,7 +22,9 @@ display_detail_keys <- c(
   "category",
   "provider_kind",
   "attempts",
-  "callback"
+  "callback",
+  "status",
+  "observed_bytes"
 )
 
 # The single value ssrf_public_reason() returns (§6.4). It is not a reason code
@@ -70,13 +72,7 @@ new_ssrf_failure <- function(
 }
 
 new_outcome <- function(token, hop, host, address, url, detail, class) {
-  if (
-    !is.numeric(hop) ||
-      length(hop) != 1L ||
-      is.na(hop) ||
-      hop < 1 ||
-      hop != trunc(hop)
-  ) {
+  if (new_outcome_bad_hop(hop)) {
     internal_error("`hop` must be a whole number from 1, the first hop.")
   }
   for (field in list(host, address, url)) {
@@ -100,6 +96,15 @@ new_outcome <- function(token, hop, host, address, url, detail, class) {
     ),
     class = c(class, "ssrfr_outcome")
   )
+}
+
+# Whether `hop` is not a hop index: anything but a single whole number from 1.
+new_outcome_bad_hop <- function(hop) {
+  !is.numeric(hop) ||
+    length(hop) != 1L ||
+    is.na(hop) ||
+    hop < 1 ||
+    hop != trunc(hop)
 }
 
 is_named <- function(x) {
@@ -157,12 +162,6 @@ format.ssrfr_outcome <- function(x, ...) {
   )
 }
 
-#' @export
-print.ssrfr_outcome <- function(x, ...) {
-  cat(format(x, ...), sep = "\n")
-  invisible(x)
-}
-
 #' Project a refusal or failure for an untrusted party
 #'
 #' Reduces a refusal or an operational failure to one fixed value that names
@@ -188,12 +187,16 @@ print.ssrfr_outcome <- function(x, ...) {
 #' @return The single string `"refused"`, whatever `x` holds.
 #'
 #' @examples
-#' refusal <- ssrfr:::new_ssrf_refusal("loopback", hop = 1, address = "::1")
+#' # A loopback literal is refused at prepare, before any resolution.
+#' refusal <- ssrf_prepare_hop(
+#'   "http://127.0.0.1/admin",
+#'   ssrf_policy(),
+#'   request = list()
+#' )
 #' refusal$code
 #' ssrf_public_reason(refusal)
 #'
-#' failure <- ssrfr:::new_ssrf_failure("timeout", hop = 2)
-#' ssrf_public_reason(failure)
+#' # An operational failure, a timeout say, gives the same string.
 #'
 #' @export
 ssrf_public_reason <- function(x) {

@@ -1,24 +1,44 @@
-# ssrfr 0.0.0.9000
+# ssrfr 1.0.0
 
-* Initial scaffold.
-* New `ssrf_policy()` builds a guard policy with every field and default of the v1 specification, and refuses a malformed entry, range, limit or `user_agent` with an `ssrfr_error_invalid_policy` condition (SSRF-upyqnwmv).
-* New `ssrf_vocabulary()` lists the closed, versioned vocabularies: reason codes, operational causes and misuse condition classes (SSRF-upyqnwmv).
-* New `ssrf_public_reason()` projects any refusal or operational failure to one value an untrusted party can see (SSRF-upyqnwmv).
-* Refusals, operational failures and misuse conditions print and format without userinfo, request header values, bodies or proxy values (SSRF-upyqnwmv).
-* The placeholder `scaffold_ready()` is removed (SSRF-upyqnwmv).
-* New `ssrf_inspect_url()` reports what a URL is under a policy with no network I/O: the parse `rurl` and libcurl agree on, the scheme, host and port libcurl reads, the `raddr` classification of an address-literal host, and the reason code the first applicable check reports. It is a pre-filter and configuration-linting aid, not a defense (SSRF-uxmxqufj).
-* `ssrf_vocabulary()` lists two new closed, versioned vocabularies of policy data: the provider endpoints refused by address (`"provider_endpoints"`) and the metadata hostnames refused by name (`"metadata_hostnames"`), each row citing and quoting the vendor documentation that names it (SSRF-uxmxqufj).
-* `ssrf_inspect_url()` gains `layer = "L1"`, which resolves a name once, with a trailing root dot so no DNS search domain applies, and classifies every address it resolves to with its embedded addresses: one refused address refuses the whole set, each address keeps its own facts in `addresses`, and a resolver error, an empty answer or an answer that is not an address is the operational cause `"unresolvable"` in the new `cause` field. The default stays `"L0"`, with no network I/O (SSRF-ifldwmnc).
-* New `ssrf_prepare_hop()` decides one guarded hop: it parses, checks, resolves once and classifies every address, then returns a refusal, an operational failure, or a binding pinned to the validated addresses. The request plan (method, header fields, body and the fields nominated as carryable) is validated at prepare, and a plan that breaks a header rule, including a metadata-service request marker, raises `ssrfr_error_invalid_request` (SSRF-rgcijatt).
-* New `ssrf_fetch()` fetches through a binding, connecting only to a validated address through a `connect_to` pin with TLS, `Host` and certificate verification bound to the hostname. It spends the binding on entry, fails over in resolver order only when a connection never opened, confirms the pin from libcurl's trace (`"pin-mismatch"` otherwise), ignores proxy variables, restricts the transport to `http` and `https`, reuses no connection, and reads the whole response within the policy's limits, counting decoded bytes. It returns a response that owns no handle, or an operational failure (SSRF-rgcijatt).
-* `ssrf_vocabulary()` lists a new closed, versioned vocabulary: the metadata-service request headers a request plan may not carry (`"metadata_headers"`) (SSRF-rgcijatt).
-* Operational failures show the addresses a fetch tried, and how each attempt ended, in their `detail` (SSRF-rgcijatt).
-* `ssrf_prepare_hop()` refuses a request plan carrying `Expect`, a field the transport owns, and `ssrf_fetch()` sends neither `Expect: 100-continue` nor libcurl's default `Accept: */*` unless the plan carries `Accept`, so a `417` cannot make it send the request twice (SSRF-rgcijatt).
-* `ssrf_fetch()` speaks HTTP/1.1 only, since over HTTP/2 libcurl sends a request again after a refused stream; reads the status and header fields of the last final response libcurl received, failing as `"protocol-error"` when the two disagree; counts a chunked body's trailer fields against `max_header_bytes` and `max_header_fields` as they arrive, a trailer line shaped like a status line included, whatever libcurl's trace shows, while a header cut short within those limits ends with the transfer's own cause; and raises neither an interrupt nor an R error of its own inside a `curl` callback, so a limit it reaches is always a failure and never runs an `options(error = )` hook, and a user's interrupt propagates, even one that lands as it stops a transfer, except in a narrow window at a callback's entry or exit documented in `design/specs/r-binding.md` §7 (SSRF-rgcijatt).
-* `ssrf_prepare_hop()` follows a redirect: `from = binding`, the previous hop's fetched binding, prepares the next hop from its `Location`, resolved against the previous URL and checked from the start. The request plan is inherited, not restated: `301` and `302` turn `POST` into `GET`, `303` turns everything but `HEAD` into `GET`, `307` and `308` keep the method and body; a redirect to another origin drops the body and every field not nominated in `carry`, never carrying `Authorization`, `Proxy-Authorization` or `Cookie`; and the fields describing a dropped body go with it, `Content-Range`, `Content-Disposition` and `Repr-Digest` included. The plan the redirect hop sends, not the one it inherits, is checked under that hop's policy, and an error names a field by its place in `from$request`. The binding's new `redirect` field records what was dropped, and a dropped body only when there was one. An `https` to `http` redirect refuses as `"downgrade"`, and a redirect hop's refusal or failure records the URL its `Location` resolved to (SSRF-fvtqbanc).
-* A redirect hop's `from` must be fetched and hold a `301`, `302`, `303`, `307` or `308` with exactly one `Location` field, and its `url` must be that `Location` byte for byte, or `ssrf_prepare_hop()` raises `ssrfr_error_invalid_from`; the hop is then prepared from the recorded `Location`, so the same bytes marked in another encoding reach the same target; a redirect hop's policy that restates `max_redirects` or `total_timeout` differently raises `ssrfr_error_budget_change`, since both budgets, and the time used, belong to the whole chain (SSRF-fvtqbanc).
-* `ssrf_fetch()` returns a `"redirect-limit"` refusal for a `3xx` response once the chain has followed `max_redirects` redirects, with or without `Location`, so under `max_redirects = 0` every `3xx` refuses. It is decided at the status line, where the transfer stops, so neither a second `Location` nor a body over the limits or one that stalls changes it, while a status line that, with any interim `1xx` blocks before it, passes `max_header_bytes` fails as `"response-too-large"`, and a transfer, stopped or completed, whose status libcurl reports otherwise ends as any whose two statuses disagree: `"protocol-error"`, unless a step 12 limit or a transport error came first (SSRF-fvtqbanc).
-* New `ssrf_fetch_chain()` follows a redirect chain for a caller without a loop of its own. Built only on `ssrf_prepare_hop()` and `ssrf_fetch()`, it follows a `301`, `302`, `303`, `307` or `308` with exactly one `Location` field, preparing the next hop from the recorded `Location` byte for byte, and returns only the last outcome: the final response, or the refusal (such as `"redirect-limit"` or `"downgrade"`) or failure that ended the chain. A caller that must log every hop runs the per-hop loop instead (SSRF-bvuwvcnh).
-* An `ssrf_fetch()` failure that one of its own callbacks ended, a `"pin-mismatch"` included, names every callback that failed, in order, in `detail$callback`, a character vector, which `format()` and `print()` show (SSRF-dmmcitul).
-* `ssrf_fetch()` ends a transfer inside its write callback once a limit is reached there, so libcurl reads nothing further: a compression bomb stopped at `max_response_size` no longer has libcurl decode, within the same round, up to hundreds of megabytes that `ssrfr` then drops. The refusal is unchanged, and no `options(error = )` hook runs (SSRF-itqfcyrw).
-* The documentation site moves to `https://bart-turczynski.gitlab.io/ssrfr/`, the GitLab Pages namespace path every package in the family uses; `DESCRIPTION` and `_pkgdown.yml` name it, replacing the project's unique-domain address, which stops resolving (SEOR-hcmtspmv).
+First release: an SSRF guard for R code that fetches URLs an attacker can influence.
+
+## Requirements
+
+* `ssrfr` requires R >= 4.1.0, as `pslr`, which it needs through `rurl`, does (`SEOR-rcpzfhgx`).
+* `ssrfr` requires `pslr` (>= 1.2.2), which fixes loading the public suffix list under Turkish and Azerbaijani locales (SSRF-mspjpegk).
+
+## Guarded fetch
+
+* `ssrf_prepare_hop()` checks one hop against the policy, resolves the name once, and returns a refusal, a failure, or a binding pinned to the validated addresses (SSRF-rgcijatt).
+* The request plan is validated when the hop is prepared: a transport-owned field or a metadata-service marker raises `ssrfr_error_invalid_request`, unless `allow_ranges` names the provider endpoint (SSRF-rgcijatt).
+* `ssrf_fetch()` connects only to a pinned, validated address, with `Host`, SNI and certificate checks bound to the hostname (SSRF-rgcijatt).
+* `ssrf_fetch()` keeps certificate verification, ignores proxy variables, allows only `http` and `https` over HTTP/1.1, and sends each request at most once (SSRF-rgcijatt).
+* A binding is single-use, and a response is read in full within the policy's limits; its `print()` never shows the body (SSRF-rgcijatt).
+* Response limits count decoded bytes, interim `1xx` responses and trailer fields, so a compression bomb stops at the limit (SSRF-itqfcyrw).
+* `ssrf_prepare_hop(from = binding)` prepares a redirect hop, applying the method rules of `301` to `308` and dropping the body and fields not named in `carry` across origins; `Authorization`, `Proxy-Authorization` and `Cookie` never cross (SSRF-fvtqbanc).
+* A redirect refuses an `https` to `http` downgrade and any hop past `max_redirects`; `max_redirects` and `total_timeout` bind the whole chain (SSRF-fvtqbanc).
+* A redirect hop's `from` must be a fetched redirect binding and its `url` that binding's `Location`, or `ssrfr_error_invalid_from` is raised (SSRF-fvtqbanc).
+* `ssrf_fetch_chain()` follows a redirect chain and returns its last outcome (SSRF-bvuwvcnh).
+
+## Inspection
+
+* `ssrf_inspect_url()` reports what a URL is under a policy, with no network I/O (SSRF-uxmxqufj).
+* A URL refuses as `"parse"` unless libcurl gets printable ASCII, so a U-label host reaches it only as its A-label (SSRF-afpkreyj).
+* A host with an `xn--` label that is not a genuine A-label refuses as `"parse"`; `ssrfr` requires `rurl` >= 3.1.0 (SSRF-imtdxdym).
+* A host with an empty label, such as `evil.example..`, refuses as `"parse"` before the scheme, credential and port checks, instead of passing the hostname rules (SSRF-qopriinc).
+* `ssrf_inspect_url(layer = "L1")` also resolves the name and classifies every address (SSRF-ifldwmnc).
+
+## Policy
+
+* `ssrf_policy()` builds a guard policy, by default `http` and `https` on ports 80 and 443 to public addresses, and raises `ssrfr_error_invalid_policy` on a malformed entry (SSRF-upyqnwmv).
+* A hostname rule with an empty label, or an `xn--` label that is not a genuine A-label, raises `ssrfr_error_invalid_policy` instead of matching nothing (SSRF-gtpebxfi).
+
+## Results and vocabularies
+
+* Refusals, failures and responses are values; misuse of the API raises a classed `ssrfr_error` (SSRF-upyqnwmv).
+* `ssrf_public_reason()` gives the one value an untrusted party may see (SSRF-upyqnwmv).
+* Refusals, failures and conditions never print userinfo, header values, bodies or proxy values (SSRF-upyqnwmv).
+* A failure's `detail` lists each address tried and how the attempt ended (SSRF-dmmcitul).
+* A body over `max_response_size` fails with the response's `status`, also recorded on the binding, and the decoded `observed_bytes` reached in `detail` (SSRF-hotiouqk).
+* `ssrf_vocabulary()` lists the closed, versioned reason codes, operational causes, condition classes and default-refused metadata endpoints (SSRF-upyqnwmv).
+* The bare host `metadata` refuses as `"cloud-metadata"` before resolution (SSRF-figjvukt).

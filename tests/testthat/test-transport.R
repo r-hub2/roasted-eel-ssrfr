@@ -15,13 +15,11 @@ caps_old <- list(
 )
 
 # A binding for `url`, with the resolver answering `answers`.
-binding_for <- function(url, answers = "93.184.216.34", policy = NULL) {
+binding_for <- function(url, answers = "93.184.216.34") {
   local_mocked_bindings(dep_nslookup = function(query) answers)
-  policy <- policy %||% ssrf_policy(allow_ports = c(80, 443, 8080))
+  policy <- ssrf_policy(allow_ports = c(80, 443, 8080))
   ssrf_prepare_hop(url, policy, request = list())
 }
-
-`%||%` <- function(x, y) if (is.null(x)) y else x
 
 # r-binding.md §7, Rules: every handle carries the pin; TLS is never
 # weakened; the "never set" options are absent. Each scheme, with explicit,
@@ -44,7 +42,7 @@ test_that("every handle carries the pin; TLS is never weakened", {
     expect_s3_class(b, "ssrfr_binding")
     for (caps in list(caps_modern, caps_old, NULL)) {
       for (address in b$validated) {
-        opts <- ssrfr:::transport_options(b, address, 10, caps)
+        opts <- transport_options(b, address, 10, caps)
         expect_identical(
           option_problems(opts, b$origin$host, address),
           character(),
@@ -58,9 +56,9 @@ test_that("every handle carries the pin; TLS is never weakened", {
   }
   # The restriction takes the string form from libcurl 7.85, else the bitmask.
   b <- binding_for("http://pin.example/")
-  modern <- ssrfr:::transport_options(b, "93.184.216.34", 10, caps_modern)
-  old <- ssrfr:::transport_options(b, "93.184.216.34", 10, caps_old)
-  unknown <- ssrfr:::transport_options(b, "93.184.216.34", 10, NULL)
+  modern <- transport_options(b, "93.184.216.34", 10, caps_modern)
+  old <- transport_options(b, "93.184.216.34", 10, caps_old)
+  unknown <- transport_options(b, "93.184.216.34", 10, NULL)
   expect_identical(modern$protocols_str, "http,https")
   expect_null(modern[["protocols"]])
   expect_identical(old[["protocols"]], 3L)
@@ -71,9 +69,28 @@ test_that("every handle carries the pin; TLS is never weakened", {
   expect_identical(unknown$accept_encoding, "identity")
 })
 
+# INV-6, r-binding.md §4.2: the connect_to key is libcurl's host. Should
+# libcurl spell an IPv6 host without brackets, the key is bracketed, so its
+# colons never read as the port fields of the entry.
+test_that("an IPv6 host libcurl spells bare is bracketed in the pin key", {
+  local_mocked_bindings(dep_curl_parse = function(url) {
+    p <- curl::curl_parse_url(url)
+    p$host <- gsub("[][]", "", p$host)
+    p
+  })
+  b <- binding_for("https://[2606:4700:4700::1111]/", NULL)
+  expect_s3_class(b, "ssrfr_binding")
+  expect_identical(b$origin$host, "2606:4700:4700::1111")
+  opts <- transport_options(b, b$validated, 10, caps_modern)
+  expect_identical(
+    opts$connect_to,
+    "[2606:4700:4700::1111]::[2606:4700:4700::1111]:"
+  )
+})
+
 test_that("the option checker fires on a planted violation", {
   b <- binding_for("http://pin.example/")
-  good <- ssrfr:::transport_options(b, "93.184.216.34", 10, caps_modern)
+  good <- transport_options(b, "93.184.216.34", 10, caps_modern)
   expect_identical(
     option_problems(good, "pin.example", "93.184.216.34"),
     character()
@@ -129,7 +146,7 @@ test_that("limits and the request plan reach the options", {
       body = "payload"
     )
   )
-  opts <- ssrfr:::transport_options(b, "93.184.216.34", 5, caps_modern)
+  opts <- transport_options(b, "93.184.216.34", 5, caps_modern)
   expect_identical(opts$connecttimeout_ms, 2000L)
   expect_identical(opts$timeout_ms, 5000L)
   # libcurl's declared-size cap is never set (§5.3): the limit is the
@@ -145,7 +162,7 @@ test_that("limits and the request plan reach the options", {
     c("X-A: 1", "X-Empty;", "Accept:", "Content-Type:", "Expect:")
   )
   # The connect timeout never exceeds what is left of the total.
-  opts <- ssrfr:::transport_options(b, "93.184.216.34", 0.5, caps_modern)
+  opts <- transport_options(b, "93.184.216.34", 0.5, caps_modern)
   expect_identical(opts$connecttimeout_ms, 500L)
 
   methods <- list(
@@ -164,7 +181,7 @@ test_that("limits and the request plan reach the options", {
       policy,
       request = list(method = m)
     )
-    opts <- ssrfr:::transport_options(b, "93.184.216.34", 5, caps_modern)
+    opts <- transport_options(b, "93.184.216.34", 5, caps_modern)
     for (field in names(methods[[m]])) {
       expect_identical(opts[[field]], methods[[m]][[field]], label = m)
     }
@@ -179,7 +196,7 @@ test_that("limits and the request plan reach the options", {
       body = "x"
     )
   )
-  opts <- ssrfr:::transport_options(b, "93.184.216.34", 5, caps_modern)
+  opts <- transport_options(b, "93.184.216.34", 5, caps_modern)
   expect_identical(
     opts$httpheader,
     c("content-type: text/plain", "ACCEPT: text/html", "Expect:")
@@ -192,7 +209,7 @@ test_that("limits and the request plan reach the options", {
     headers = c(Expect = "100-continue"),
     body = charToRaw("x")
   )
-  lines <- ssrfr:::request_options(planted, policy)$httpheader
+  lines <- request_options(planted, policy)$httpheader
   expect_identical(lines[[length(lines)]], "Expect:")
 })
 
@@ -223,7 +240,7 @@ test_that("one place dials", {
 # garbled, another address or port are mismatches; the pinned address is a
 # match, an IPv6 address compared as a raddr value (INV-3).
 test_that("the trace matcher fails safe", {
-  check <- ssrfr:::pin_check
+  check <- pin_check
   expect_identical(check(character(), "127.0.0.1", 80L), "absent")
   expect_identical(
     check(
@@ -279,7 +296,7 @@ test_that("the trace matcher fails safe", {
 # line opens a block unless a complete final block precedes it; after a
 # complete final block, every line is a trailer line.
 test_that("the header buffer is segmented by the block before each line", {
-  segments <- function(...) ssrfr:::header_segments(wire(...))
+  segments <- function(...) header_segments(wire(...))
   blocks <- function(start, end, status, complete) {
     list(
       start = as.integer(start),
@@ -327,7 +344,7 @@ test_that("the header buffer is segmented by the block before each line", {
   )
   expect_identical(s$trailers, integer())
   # An empty buffer has no block and no trailer.
-  s <- ssrfr:::header_segments(raw())
+  s <- header_segments(raw())
   expect_identical(s$blocks, blocks(integer(), integer(), integer(), logical()))
   expect_identical(s$trailers, integer())
   expect_identical(s$ends, integer())
@@ -335,7 +352,7 @@ test_that("the header buffer is segmented by the block before each line", {
   # line, and a NUL byte never breaks the reading.
   s <- segments("HTTP/1.1 200\tOK\r\nX: 1\r\n\r\n")
   expect_length(s$blocks$start, 0L)
-  s <- ssrfr:::header_segments(c(
+  s <- header_segments(c(
     wire("HTTP/1.1 200 OK\r\nX: a"),
     as.raw(0L),
     wire("b\r\n\r\n")
@@ -347,7 +364,7 @@ test_that("the header buffer is segmented by the block before each line", {
 # it: a status line opens a block, a lone CR is an empty line that ends one,
 # and after a complete final block it is a trailer line.
 test_that("a last line with no LF is segmented as the buffer holds it", {
-  segments <- function(...) ssrfr:::header_segments(wire(...))
+  segments <- function(...) header_segments(wire(...))
   blocks <- function(start, end, status, complete) {
     list(
       start = as.integer(start),
@@ -389,12 +406,12 @@ test_that("the header buffer is segmented in linear time", {
   timed <- function(kib) {
     count <- (kib * 1024) %/% nchar(block)
     buffer <- wire(strrep(block, count))
-    expect_length(ssrfr:::header_segments(buffer)$blocks$start, count)
+    expect_length(header_segments(buffer)$blocks$start, count)
     reps <- 1L
     repeat {
       t <- system.time(
         for (i in seq_len(reps)) {
-          ssrfr:::header_segments(buffer)
+          header_segments(buffer)
         }
       )[["elapsed"]]
       if (t >= 0.25 || reps >= 256L) {
@@ -417,8 +434,8 @@ test_that("the header buffer is segmented in linear time", {
 # The work is counted, not timed, so the ratio holds on any runner.
 test_that("a header trickled a line at a time is segmented in linear work", {
   work <- new.env(parent = emptyenv())
-  read_lines <- ssrfr:::header_lines
-  classify <- ssrfr:::classify_lines
+  read_lines <- header_lines
+  classify <- classify_lines
   local_mocked_bindings(
     header_lines = function(bytes) {
       work$bytes <- work$bytes + length(bytes)
@@ -437,7 +454,7 @@ test_that("a header trickled a line at a time is segmented in linear work", {
     buffer <- wire(strrep(block, count))
     seen <- new.env(parent = emptyenv())
     for (n in which(buffer == as.raw(10L))) {
-      ssrfr:::measure_header(seen, buffer[seq_len(n)])
+      measure_header(seen, buffer[seq_len(n)])
     }
     expect_length(seen$segments$blocks$start, count)
     c(bytes = work$bytes, lines = work$lines)
@@ -457,7 +474,7 @@ test_that("response headers are read from the final block only", {
     "X-Folded: one\r\n two\r\n",
     "Set-Cookie: a=1\r\nSet-Cookie: b=2\r\n\r\n"
   ))
-  parsed <- ssrfr:::parse_response_headers(raw)
+  parsed <- parse_response_headers(raw)
   expect_identical(parsed$status, 302L)
   h <- parsed$headers
   expect_named(
@@ -467,17 +484,35 @@ test_that("response headers are read from the final block only", {
   expect_identical(unname(h[["x-folded"]]), "one two")
   # libcurl appends a chunked body's trailer section after the header's
   # empty line; its fields are not header fields.
-  trailed <- ssrfr:::parse_response_headers(charToRaw(paste0(
+  trailed <- parse_response_headers(charToRaw(paste0(
     "HTTP/1.1 103 Early Hints\r\nLink: </a>\r\n\r\n",
     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
     "Location: /trailer\r\nHTTP/1.1 302 Found\r\n\r\n"
   )))
   expect_identical(trailed$headers, c(`transfer-encoding` = "chunked"))
-  expect_null(ssrfr:::parse_response_headers(charToRaw("garbage\r\n")))
+  expect_null(parse_response_headers(charToRaw("garbage\r\n")))
   expect_null(
-    ssrfr:::parse_response_headers(charToRaw("HTTP/1.1 200 OK\r\nno colon\r\n"))
+    parse_response_headers(charToRaw("HTTP/1.1 200 OK\r\nno colon\r\n"))
   )
-  expect_null(ssrfr:::parse_response_headers(as.raw(c(0x48, 0x00, 0x49))))
+  expect_null(parse_response_headers(as.raw(c(0x48, 0x00, 0x49))))
+})
+
+# RFC 9112 §5: a complete final block whose line is neither a field line nor
+# the folding of one is no response, so the fetch makes it `protocol-error`.
+test_that("a final block with a line that is not a field line is no response", {
+  for (line in c("no colon", " folded with nothing before it", ": no name")) {
+    expect_null(
+      parse_response_headers(wire(
+        "HTTP/1.1 200 OK\r\n",
+        line,
+        "\r\n\r\n"
+      )),
+      label = line
+    )
+  }
+  # The same block without that line is a response.
+  parsed <- parse_response_headers(wire("HTTP/1.1 200 OK\r\n\r\n"))
+  expect_identical(parsed$status, 200L)
 })
 
 # libcurl reads no header after a complete final block, so the status and
@@ -487,7 +522,7 @@ test_that("response headers are read from the final block only", {
 # disagrees, and the fetch fails before the first one's Location reaches the
 # binding (test-fetch.R, "a status that disagrees with the header block").
 test_that("status and fields come from the complete final block", {
-  parsed <- ssrfr:::parse_response_headers(wire(
+  parsed <- parse_response_headers(wire(
     "HTTP/1.1 100 Continue\r\n\r\n",
     "HTTP/1.1 401 Unauthorized\r\n",
     "Location: /a\r\nWWW-Authenticate: Basic realm=\"x\"\r\n\r\n",
@@ -499,14 +534,14 @@ test_that("status and fields come from the complete final block", {
   expect_false("content-type" %in% names(parsed$headers))
   # A trailer section follows the final block with no empty line of its
   # own, so a trailer line shaped like a status line never starts a block.
-  forged <- ssrfr:::parse_response_headers(wire(
+  forged <- parse_response_headers(wire(
     "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
     "HTTP/1.1 302 Found\r\nLocation: /trailer\r\n"
   ))
   expect_identical(forged$status, 200L)
   expect_identical(forged$headers, c(`transfer-encoding` = "chunked"))
   # A buffer whose only final block never ends is not a response.
-  expect_null(ssrfr:::parse_response_headers(wire(
+  expect_null(parse_response_headers(wire(
     "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nX: 1\r\n"
   )))
 })
@@ -524,7 +559,7 @@ test_that("a header value with obs-text is kept byte for byte", {
     wire("\r\nSet-Cookie: secret=1\r\n\r\n")
   )
   h <- NULL
-  expect_no_warning(h <- ssrfr:::parse_response_headers(raw)$headers)
+  expect_no_warning(h <- parse_response_headers(raw)$headers)
   expect_named(
     h,
     c("content-disposition", "x-utf8", "content-type", "set-cookie")
@@ -543,13 +578,13 @@ test_that("a header value with obs-text is kept byte for byte", {
   )
   # A media type that is not text is withheld, never an error.
   expect_identical(
-    ssrfr:::display_media_type(unname(h[["content-type"]])),
+    display_media_type(unname(h[["content-type"]])),
     "<withheld>"
   )
 })
 
 test_that("the displayed media type drops parameters and withholds junk", {
-  show <- ssrfr:::display_media_type
+  show <- display_media_type
   expect_identical(show("Text/HTML; charset=utf-8"), "text/html")
   expect_identical(show(character()), NA_character_)
   expect_identical(show("\033[31mred\033[0m/x"), "<withheld>")
@@ -557,10 +592,10 @@ test_that("the displayed media type drops parameters and withholds junk", {
 })
 
 test_that("libcurl's capabilities are read once per session", {
-  cache <- ssrfr:::curl_capabilities_cache
+  cache <- curl_capabilities_cache
   saved <- cache$value
   withr::defer(assign("value", saved, envir = cache))
-  version <- ssrfr:::dep_curl_version
+  version <- dep_curl_version
   calls <- new.env(parent = emptyenv())
   calls$n <- 0L
   local_mocked_bindings(dep_curl_version = function() {
@@ -568,21 +603,21 @@ test_that("libcurl's capabilities are read once per session", {
     version()
   })
   cache$value <- NULL
-  first <- ssrfr:::session_curl_capabilities()
-  second <- ssrfr:::session_curl_capabilities()
-  expect_identical(first, ssrfr:::read_curl_capabilities())
+  first <- session_curl_capabilities()
+  second <- session_curl_capabilities()
+  expect_identical(first, read_curl_capabilities())
   expect_identical(second, first)
   # The two session readings made one call; the direct reading another.
   expect_identical(calls$n, 2L)
   # A failed reading is not kept.
   cache$value <- NULL
   local_mocked_bindings(dep_curl_version = function() stop("x"))
-  expect_null(ssrfr:::session_curl_capabilities())
+  expect_null(session_curl_capabilities())
   expect_null(cache$value)
 })
 
 test_that("libcurl's capabilities are read through guarded wrappers", {
-  caps <- ssrfr:::read_curl_capabilities()
+  caps <- read_curl_capabilities()
   expect_s3_class(caps$version, "numeric_version")
   expect_type(caps$protocols_str, "logical")
   for (wrapper in c("dep_curl_version", "dep_curl_options")) {
@@ -591,8 +626,23 @@ test_that("libcurl's capabilities are read through guarded wrappers", {
     })) {
       local({
         do.call(local_mocked_bindings, stats::setNames(list(failure), wrapper))
-        expect_null(ssrfr:::read_curl_capabilities(), label = wrapper)
+        expect_null(read_curl_capabilities(), label = wrapper)
       })
     }
   }
+})
+
+# A version string that does not start with a number reads as no
+# capabilities, so the builder falls back to the forms every libcurl takes.
+test_that("a libcurl version with no number reads as no capabilities", {
+  version <- dep_curl_version
+  local_mocked_bindings(dep_curl_version = function() {
+    modifyList(version(), list(version = "unknown"))
+  })
+  expect_null(read_curl_capabilities())
+  local_mocked_bindings(dep_curl_version = function() {
+    modifyList(version(), list(version = "8.14.1-DEV"))
+  })
+  caps <- read_curl_capabilities()
+  expect_identical(caps$version, numeric_version("8.14.1"))
 })

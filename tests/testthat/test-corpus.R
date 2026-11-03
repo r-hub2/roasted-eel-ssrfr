@@ -11,7 +11,9 @@
 #
 # A pending row is never skipped (§7.2): its marker is asserted, and so is the
 # fact that its expectation still does not hold, so the day the upstream fix
-# lands the test fails and the row is promoted to active.
+# lands the test fails and the row is promoted to active. That second check
+# skips on CRAN, where an upstream release would fail it rather than any
+# change here.
 
 # A field may carry only the escapes defined in fixtures/README.md.
 has_bad_escape <- function(x) {
@@ -212,8 +214,17 @@ test_that("every active L0 verdict vector is decided at L0 with its code", {
 test_that("pending L0 verdict vectors keep their marker and still differ", {
   v <- read_corpus("verdict-vectors.tsv")
   rows <- v[v$layer == "L0" & startsWith(v$status, "pending:"), ]
-  expect_identical(rows$id, "V0350")
-  expect_identical(rows$status, "pending:RURL-vicyvlvh")
+  # V0350 became active with rurl 3.1.0 (SSRF-imtdxdym). V0541 and V0542, and
+  # their bare-`metadata` counterparts V0551 and V0552, wait on rurl or
+  # punycoder reading a percent-encoded trailing full stop (SSRF-shdndpga);
+  # until then they refuse as `parse`. test-binding.R asserts, on CRAN too,
+  # that these four URLs refuse whichever code they reach; this loop does
+  # not. A row marked pending later is named here, and its refusal asserted
+  # there.
+  expect_identical(rows$id, c("V0541", "V0542", "V0551", "V0552"))
+  # The tripwire below fails the day the upstream fix lands, so on CRAN it
+  # would fail on that release rather than on any change here.
+  skip_on_cran()
   for (i in seq_len(nrow(rows))) {
     expect_false(
       identical(inspect_row(rows[i, ]), rows$code[i]),
@@ -334,7 +345,7 @@ test_that("every active L2 verdict vector is decided at L2 with its code", {
     length(untrusted) > 0L,
     paste(
       "not decided, the fixture CA cannot be trusted:",
-      paste(untrusted, collapse = ", ")
+      toString(untrusted)
     )
   )
 })
@@ -366,7 +377,7 @@ test_that("every redirect verdict vector is decided through the guarded hop", {
     length(untrusted) > 0L,
     paste(
       "not decided, the fixture CA cannot be trusted:",
-      paste(untrusted, collapse = ", ")
+      toString(untrusted)
     )
   )
   expect_identical(sum(via == "from"), 28L)
@@ -400,8 +411,11 @@ test_that("every active parse vector meets its expectation, host by value", {
 test_that("pending parse vectors keep their marker and still differ", {
   p <- read_corpus("parse-vectors.tsv")
   rows <- p[startsWith(p$status, "pending:"), ]
-  expect_identical(rows$id, c("P0060", "P0061", "P0062"))
-  expect_true(all(rows$status == "pending:RURL-vicyvlvh"))
+  # None is pending since P0060-P0062 became active (rurl 3.1.0,
+  # SSRF-imtdxdym); a row marked pending later is named here.
+  expect_identical(rows$id, character())
+  # As for the L0 rows: the tripwire would fail on an upstream release.
+  skip_on_cran()
   for (i in seq_len(nrow(rows))) {
     expect_false(
       identical(parse_row(rows$input[i])$outcome, rows$expect[i]),
